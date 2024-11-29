@@ -17,6 +17,7 @@ from exiftool import ExifToolHelper
 from umi.common.timecode_util import mp4_get_start_datetime
 
 import datetime
+import pandas as pd
 
 # %%
 @click.command(help='Session directories. Assumming mp4 videos are in <session_dir>/raw_videos')
@@ -83,6 +84,11 @@ def main(session_dir):
         input_mp4_paths = list(input_dir.glob('**/*.MP4')) + list(input_dir.glob('**/*.mp4'))
         print(f'Found {len(input_mp4_paths)} MP4 videos')
 
+        ###############################################################################################
+        # look for video directories in demos
+        video_datetime_to_outdir = {}
+        video_datetimes = []
+        ###############################################################################################
 
         with ExifToolHelper() as et:
             for mp4_path in input_mp4_paths:
@@ -117,6 +123,86 @@ def main(session_dir):
                 symlink_path = os.path.join(dots, rel_path)                
                 mp4_path.symlink_to(symlink_path)
 
+
+        ###############################################################################################
+                # Store the video direction
+                video_datetime_to_outdir[start_date] = this_out_dir
+                video_datetimes.append(start_date)
+
+        # Sort video datetimes
+        video_datetimes.sort()
+        ###############################################################################################
+
+        csv_datetimes = []
+        ###############################################################################################
+        # look for csv file in all subdirectories in input dir
+        # input_csv_paths = list(input_dir.glob('**/*.csv')) + list(input_dir.glob('**/*.csv'))
+        input_csv_paths = list(input_dir.glob('*.csv'))
+        input_csv_paths.sort()
+        print(f'Found {len(input_csv_paths)} csv files')
+        assert len(input_csv_paths) + 2 == len(input_mp4_paths)
+        for i, csv_path in enumerate(input_csv_paths):
+            if csv_path.is_symlink():
+                print(f"Skipping {csv_path.name}, already moved.")
+                continue
+            
+            # Filter ill rows
+            print(f"Filtering {csv_path.name}")
+            df = pd.read_csv(csv_path, encoding='latin1')
+            numeric_columns = ['timestamp', 'Fx', 'Fy', 'Fz', 'Tx', 'Ty', 'Tz', 'width', 'width_origin', 'minW', 'maxW']
+            for col in numeric_columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            corrupted_rows = df[df.isnull().any(axis=1)]
+            print(f"Found {len(corrupted_rows)} corrupted rows. Dropping them.")
+            df_cleaned = df.dropna()
+            df_interpolated = df_cleaned.interpolate(method='linear', limit_direction='both', axis=0)
+            df_interpolated.to_csv(csv_path, index=False)
+            print(f"Filtering succeed")
+
+
+            # move F/T sensor and gripper width csv file
+            # the csv file name are like 'task_YYYYMMDD_HHMMSS.csv'
+            csv_filename = csv_path.name
+            csv_base_name = csv_filename.split('.')[0]
+            name_parts = csv_base_name.split('_')
+            if len(name_parts) < 3:
+                print(f"csv filename {csv_filename} does not have expected format.")
+                continue
+            date_part = name_parts[1]
+            time_part = name_parts[2]
+            csv_datetime_str = date_part + time_part
+
+            try:
+                csv_datetime = datetime.datetime.strptime(csv_datetime_str, "%Y%m%d%H%M%S")
+                csv_datetimes.append(csv_datetime)
+            except ValueError:
+                print(f"Could not parse datetime from csv file name {csv_filename}")
+                continue
+            
+            # Find the closest video datetime
+            #closest_video_datetime = min(video_datetimes, key=lambda vd: abs(vd - csv_datetime))
+            # for vd in video_datetimes
+            # vd_diff = abs(vd - csv_datetime)
+            # closest_video_datetime = argmin(vd_diff_list) in video_datetimes
+            #time_diff = abs(closest_video_datetime - csv_datetime)
+            #if time_diff.total_seconds() > 60:
+            #    print(f"Warning: csv file {csv_filename} time differs from closest video by {time_diff}")
+            #    continue
+            
+            #this_out_dir = video_datetime_to_outdir[closest_video_datetime]
+            this_out_dir = video_datetime_to_outdir[video_datetimes[i + 2]]
+            print(f"Pair with {this_out_dir}")
+            cfname = 'ft_sensor_gripper_width.csv'
+            out_csv_path = this_out_dir.joinpath(cfname)
+
+            shutil.move(csv_path, out_csv_path)
+
+            # Create symlink back from original location
+            dots = os.path.join(*['..'] * len(csv_path.parent.relative_to(session).parts))
+            rel_path = str(out_csv_path.relative_to(session))
+            symlink_path = os.path.join(dots, rel_path)
+            csv_path.symlink_to(symlink_path)
+        ###############################################################################################
 
 # %%
 if __name__ == '__main__':

@@ -9,8 +9,6 @@ import os
 import matplotlib.pyplot as plt
 from datetime import datetime
 
-
-
 ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 sys.path.append(ROOT_DIR)
 os.chdir(ROOT_DIR)
@@ -163,14 +161,14 @@ def main(input, output, tcp_offset, tx_slam_tag,
         ignore_cam_serials = set(serials)
     
     fps = None
-    rows = list()
+    rows = list() # SC: each row represents video meta data
     with ExifToolHelper() as et:
-        for video_dir in video_dirs:            
+        for video_dir in video_dirs:  # SC: each video directory represents each video folder
             mp4_path = video_dir.joinpath('raw_video.mp4')
             meta = list(et.get_metadata(str(mp4_path)))[0]
             cam_serial = meta['QuickTime:CameraSerialNumber']
-            start_date = mp4_get_start_datetime(str(mp4_path))
-            start_timestamp = start_date.timestamp()
+            start_date = mp4_get_start_datetime(str(mp4_path)) 
+            start_timestamp = start_date.timestamp() # SC: Unix timestamp of the video
 
             if cam_serial in ignore_cam_serials:
                 print(f"Ignored {video_dir.name}")
@@ -211,7 +209,7 @@ def main(input, output, tcp_offset, tx_slam_tag,
         print("No valid videos found!")
         exit(1)
             
-    video_meta_df = pd.DataFrame(data=rows)
+    video_meta_df = pd.DataFrame(data=rows) # SC: make dataframe from rows
 
 
     # %% stage 2
@@ -245,7 +243,7 @@ def main(input, output, tcp_offset, tx_slam_tag,
         })
     events = sorted(events, key=lambda x: x['t'])
     
-    demo_data_list = list()
+    demo_data_list = list() # SC: each element of demo_data_list is start and end timestamp of each video
     on_videos = set()
     on_cameras = set()
     used_videos = set()
@@ -580,8 +578,26 @@ def main(input, output, tcp_offset, tx_slam_tag,
         all_cam_poses = list()
         all_gripper_widths = list()
         all_is_valid = list()
+
+        all_Fx_values = list()
+        all_Fy_values = list()
+        all_Fz_values = list()
+        all_Tx_values = list()
+        all_Ty_values = list()
+        all_Tz_values = list()
         
         for cam_idx, row in demo_video_meta_df.iterrows():
+
+            #################################################################################
+            # SC: to calculate offset, save start and end timestamp of each demo data
+            video_start_timestamp = row['start_timestamp']
+            video_end_timestamp = row['end_timestamp'] 
+            video_duration = video_end_timestamp - video_start_timestamp
+            print(f"Video duration: {video_duration}")
+            print(f"Video start timestamp: {row['start_timestamp']}")
+            print(f"Video end timestamp: {row['end_timestamp']}")
+            #################################################################################
+
             if cam_idx >= n_gripper_cams:
                 # not gripper camera
                 continue
@@ -637,64 +653,150 @@ def main(input, output, tcp_offset, tx_slam_tag,
             is_step_valid = is_tracked.copy()
             
 
-            # get gripper data
-            pkl_path = video_dir.joinpath('tag_detection.pkl')
-            if not pkl_path.is_file():
-                print(f"Skipping {video_dir.name}, no tag_detection.pkl.")
-                dropped_camera_count[row['camera_serial']] += 1
-                continue
+            # # get gripper data
+            # pkl_path = video_dir.joinpath('tag_detection.pkl')
+            # if not pkl_path.is_file():
+            #     print(f"Skipping {video_dir.name}, no tag_detection.pkl.")
+            #     dropped_camera_count[row['camera_serial']] += 1
+            #     continue
                         
-            tag_detection_results = pickle.load(open(pkl_path, 'rb'))
-            # select aligned frames
-            tag_detection_results = tag_detection_results[start_frame_idx: start_frame_idx+n_frames]
+            # tag_detection_results = pickle.load(open(pkl_path, 'rb'))
+            # # select aligned frames
+            # tag_detection_results = tag_detection_results[start_frame_idx: start_frame_idx+n_frames]
 
-            # one item per frame
-            video_timestamps = np.array([x['time'] for x in tag_detection_results])
+            # # one item per frame
+            # video_timestamps = np.array([x['time'] for x in tag_detection_results])
 
-            if len(df) != len(video_timestamps):
-                print(f"Skipping {video_dir.name}, video csv length mismatch.")
-                continue
+            # if len(df) != len(video_timestamps):
+            #     print(f"Skipping {video_dir.name}, video csv length mismatch.")
+            #     continue
 
-            # get gripper action
-            ghi = row['gripper_hardware_id']
-            if ghi < 0:
-                print(f"Skipping {video_dir.name}, invalid gripper hardware id {ghi}")
+            # # get gripper action
+            # ghi = row['gripper_hardware_id']
+            # if ghi < 0:
+            #     print(f"Skipping {video_dir.name}, invalid gripper hardware id {ghi}")
+            #     dropped_camera_count[row['camera_serial']] += 1
+            #     continue
+            
+            # left_id = 6 * ghi
+            # right_id = left_id + 1
+
+            # gripper_cal_interp = None
+            # if ghi in gripper_id_gripper_cal_map:
+            #     gripper_cal_interp = gripper_id_gripper_cal_map[ghi]
+            # elif row['camera_serial'] in cam_serial_gripper_cal_map:
+            #     gripper_cal_interp = cam_serial_gripper_cal_map[row['camera_serial']]
+            #     print(f"Gripper id {ghi} not found in gripper calibrations {list(gripper_id_gripper_cal_map.keys())}. Falling back to camera serial map.")
+            # else:
+            #     raise RuntimeError("Gripper calibration not found.")
+
+            # gripper_timestamps = list()
+            # gripper_widths = list()
+            # for td in tag_detection_results:
+            #     width = get_gripper_width(td['tag_dict'], 
+            #         left_id=left_id, right_id=right_id, 
+            #         nominal_z=nominal_z)
+            #     if width is not None:
+            #         gripper_timestamps.append(td['time'])
+            #         gripper_widths.append(gripper_cal_interp(width))
+            # gripper_interp = get_interp1d(gripper_timestamps, gripper_widths)
+            
+            # gripper_det_ratio = (len(gripper_widths) / len(tag_detection_results))
+            # if gripper_det_ratio < 0.9:
+            #     print(f"Warining: {video_dir.name} only {gripper_det_ratio} of gripper tags detected.")
+            
+            # this_gripper_widths = gripper_interp(video_timestamps)
+
+
+            '''
+                Modified get gripper data
+
+                match timestamp of csv file with video
+
+                one width per frame
+            '''
+            ###############################################################################################
+            gripper_csv_path = video_dir.joinpath('ft_sensor_gripper_width.csv')
+            if not gripper_csv_path.is_file():
+                print(f"Skipping {video_dir.name}, no gripper width CSV file found.")
                 dropped_camera_count[row['camera_serial']] += 1
                 continue
-            
-            left_id = 6 * ghi
-            right_id = left_id + 1
 
-            gripper_cal_interp = None
-            if ghi in gripper_id_gripper_cal_map:
-                gripper_cal_interp = gripper_id_gripper_cal_map[ghi]
-            elif row['camera_serial'] in cam_serial_gripper_cal_map:
-                gripper_cal_interp = cam_serial_gripper_cal_map[row['camera_serial']]
-                print(f"Gripper id {ghi} not found in gripper calibrations {list(gripper_id_gripper_cal_map.keys())}. Falling back to camera serial map.")
-            else:
-                raise RuntimeError("Gripper calibration not found.")
+            gripper_df = pd.read_csv(gripper_csv_path)
 
-            gripper_timestamps = list()
-            gripper_widths = list()
-            for td in tag_detection_results:
-                width = get_gripper_width(td['tag_dict'], 
-                    left_id=left_id, right_id=right_id, 
-                    nominal_z=nominal_z)
-                if width is not None:
-                    gripper_timestamps.append(td['time'])
-                    gripper_widths.append(gripper_cal_interp(width))
-            gripper_interp = get_interp1d(gripper_timestamps, gripper_widths)
+            if not {'timestamp', 'width'}.issubset(gripper_df.columns):
+                print(f"CSV file {gripper_csv_path} does not contain required columns.")
+                continue
             
-            gripper_det_ratio = (len(gripper_widths) / len(tag_detection_results))
-            if gripper_det_ratio < 0.9:
-                print(f"Warining: {video_dir.name} only {gripper_det_ratio} of gripper tags detected.")
             
+            gripper_timestamps = gripper_df['timestamp'].to_numpy()
+            gripper_widths = gripper_df['width'].to_numpy()
+
+
+            # offset calculation
+            gripper_start_timestamp = gripper_timestamps[0]
+            gripper_end_timestamp = gripper_timestamps[-1]
+            gripper_duration = gripper_end_timestamp - gripper_start_timestamp
+            print(f"Gripper duration: {gripper_duration}")
+            print(f"Gripper start timestamp: {gripper_start_timestamp}")
+            print(f"Gripper end timestamp: {gripper_end_timestamp}")
+
+            video_csv_time_offset = gripper_start_timestamp - video_start_timestamp
+            print(f"Time offset between gripper data and video: {video_csv_time_offset} seconds")
+
+            # Assume duration is similar, adjust gipper timestamps
+            adjusted_gripper_timestamps = gripper_timestamps - video_csv_time_offset
+
+            dt = 1 / row['fps']
+            
+            video_timestamps = np.arange(n_frames) * float(dt) + start_timestamp
+
+            # gripper_interp = get_interp1d(gripper_timestamps, gripper_widths)
+            gripper_interp = get_interp1d(adjusted_gripper_timestamps, gripper_widths)
             this_gripper_widths = gripper_interp(video_timestamps)
 
-            now = datetime.now()
-            save_path = f'gripper_data_plot_{demo_idx}_{now.strftime("%y=%m-%d %H:%M")}.png'
-            plot_data(video_timestamps=video_timestamps, csv_timestamps=gripper_timestamps, gripper_width=gripper_widths, i_gripper_width=this_gripper_widths, save_path=save_path)
+
+            ###############################################################################################
+
+
+
+            '''
+                Load F/T sensor data
+
+                match timestamp of csv file with video
+
+                one width per frame
+            '''
+            ###############################################################################################
+            ft_df = gripper_df
+            # ft_timestamps = gripper_timestamps
+            ft_timestamps = adjusted_gripper_timestamps
+            if not {'Fx', 'Fy', 'Fz', 'Tx', 'Ty', 'Tz'}.issubset(ft_df.columns):
+                print(f"CSV file {gripper_csv_path} does not contain required columns.")
+                continue
             
+            Fx = ft_df['Fx'].to_numpy()
+            Fy = ft_df['Fy'].to_numpy()
+            Fz = ft_df['Fz'].to_numpy()
+            Tx = ft_df['Tx'].to_numpy()
+            Ty = ft_df['Ty'].to_numpy()
+            Tz = ft_df['Tz'].to_numpy()
+
+            Fx_interp = get_interp1d(ft_timestamps, Fx)
+            Fy_interp = get_interp1d(ft_timestamps, Fy)
+            Fz_interp = get_interp1d(ft_timestamps, Fz)
+            Tx_interp = get_interp1d(ft_timestamps, Tx)
+            Ty_interp = get_interp1d(ft_timestamps, Ty)
+            Tz_interp = get_interp1d(ft_timestamps, Tz)
+
+            interpolated_Fx = Fx_interp(video_timestamps)
+            interpolated_Fy = Fy_interp(video_timestamps)
+            interpolated_Fz = Fz_interp(video_timestamps)
+            interpolated_Tx = Tx_interp(video_timestamps)
+            interpolated_Ty = Ty_interp(video_timestamps)
+            interpolated_Tz = Tz_interp(video_timestamps)
+
+            ###############################################################################################
             
             # transform to tcp frame
             tx_tag_tcp = tx_tag_cam @ tx_cam_tcp
@@ -705,9 +807,47 @@ def main(input, output, tcp_offset, tx_slam_tag,
             assert len(this_gripper_widths) == n_frames
             assert len(is_step_valid) == n_frames
 
+            assert len(interpolated_Fx) == n_frames
+            assert len(interpolated_Fy) == n_frames
+            assert len(interpolated_Fz) == n_frames
+            assert len(interpolated_Tx) == n_frames
+            assert len(interpolated_Ty) == n_frames
+            assert len(interpolated_Tz) == n_frames
+
             all_cam_poses.append(pose_tag_tcp)
             all_gripper_widths.append(this_gripper_widths)
             all_is_valid.append(is_step_valid)
+
+            all_Fx_values.append(interpolated_Fx)
+            all_Fy_values.append(interpolated_Fy)
+            all_Fz_values.append(interpolated_Fz)
+            all_Tx_values.append(interpolated_Tx)
+            all_Ty_values.append(interpolated_Ty)
+            all_Tz_values.append(interpolated_Tz)
+
+
+            # Plot gripper width and ft sensor data over time
+            now = datetime.now()
+            save_path = f'gripper_ft_data_plot_{demo_idx}_{now.strftime("%y=%m-%d %H%M")}.png'
+            plot_gripper_and_ft_data(video_timestamps=video_timestamps, 
+                                 csv_timestamps=adjusted_gripper_timestamps, 
+                                 gripper_width=gripper_widths, 
+                                 i_gripper_width=this_gripper_widths, 
+                                 Fx=Fx, 
+                                 i_Fx=interpolated_Fx, 
+                                 Fy=Fy, 
+                                 i_Fy=interpolated_Fy, 
+                                 Fz=Fz, 
+                                 i_Fz=interpolated_Fz, 
+                                 Tx=Tx, 
+                                 i_Tx=interpolated_Tx, 
+                                 Ty=Ty, 
+                                 i_Ty=interpolated_Ty, 
+                                 Tz=Tz, 
+                                 i_Tz=interpolated_Tz, 
+                                 save_path=save_path)
+
+
 
         if len(all_cam_poses) != n_gripper_cams:
             print(f"Skipped demo {demo_idx}.")
@@ -760,7 +900,15 @@ def main(input, output, tcp_offset, tx_slam_tag,
                         "tcp_pose": pose_tag_tcp,
                         "gripper_width": all_gripper_widths[cam_idx][start:end],
                         "demo_start_pose": demo_start_poses[cam_idx],
-                        "demo_end_pose": demo_end_poses[cam_idx]
+                        "demo_end_pose": demo_end_poses[cam_idx],
+
+                        "Fx": all_Fx_values[cam_idx][start:end],
+                        "Fy": all_Fx_values[cam_idx][start:end],
+                        "Fz": all_Fx_values[cam_idx][start:end],
+                        "Tx": all_Fx_values[cam_idx][start:end],
+                        "Ty": all_Fx_values[cam_idx][start:end],
+                        "Tz": all_Fx_values[cam_idx][start:end]
+
                     })
                 # all cams
                 video_dir = row['video_dir']
@@ -794,24 +942,69 @@ def test():
     nominal_z = 0.075
     min_episode_length = 24
 
-def plot_data(video_timestamps, csv_timestamps, gripper_width, i_gripper_width, save_path = None):
-    fig, axes = plt.subplots(1, 2, figsize=(20, 8))
+def plot_gripper_and_ft_data(video_timestamps, csv_timestamps, gripper_width, i_gripper_width, Fx, i_Fx, Fy, i_Fy, Fz, i_Fz, Tx, i_Tx, Ty, i_Ty, Tz, i_Tz, save_path=None):
+    # i represent interpolated
+    fig, axes = plt.subplots(3, 2, figsize=(15, 15))
 
-    axes[0].plot(csv_timestamps, gripper_width, 'o-', label='Original Gripper Width')
-    axes[0].set_xlabel('Timestamp (s)')
-    axes[0].set_ylabel('Gripper Width')
-    axes[0].set_title('Gripper Width Over Time')
-    axes[0].legend()
-    
-    axes[1].plot(video_timestamps, i_gripper_width, 'o', label='Interpolated Gripper Width', markerfacecolor='none', markeredgecolor='blue')
-    axes[1].set_xlabel('Timestamp (s)')
-    axes[1].set_ylabel('Gripper Width')
-    axes[1].set_title('Gripper Width Over Time')
-    axes[1].legend()
+    axes[0, 0].plot(csv_timestamps, gripper_width, 'o-', label='Original Gripper Width')
+    axes[0, 0].set_xlabel('Timestamp (s)')
+    axes[0, 0].set_ylabel('Gripper Width')
+    axes[0, 0].set_title('Original Gripper Width')
+    axes[0, 0].legend()
 
+    axes[0, 1].plot(video_timestamps, i_gripper_width, 'o', label='Interpolated Gripper Width',
+                    markerfacecolor='none', markeredgecolor='blue')
+    axes[0, 1].set_xlabel('Timestamp (s)')
+    axes[0, 1].set_title('Interpolated Gripper Width')
+    axes[0, 1].legend()
+
+    # Plot Forces (Fx, Fy, Fz)
+    axes[1, 0].plot(csv_timestamps, Fx, 'r-', label='Original Fx')
+    axes[1, 0].plot(csv_timestamps, Fy, 'g-', label='Original Fy')
+    axes[1, 0].plot(csv_timestamps, Fz, 'b-', label='Original Fz')
+    axes[1, 0].set_xlabel('Timestamp (s)')
+    axes[1, 0].set_ylabel('Force (N)')
+    axes[1, 0].set_title('Original Forces (Fx, Fy, Fz)')
+    axes[1, 0].legend()
+
+    axes[1, 1].plot(video_timestamps, i_Fx, 'o', label='Interpolated Fx', 
+                    markerfacecolor='none', markeredgecolor='red')
+    axes[1, 1].plot(video_timestamps, i_Fy, 's', label='Interpolated Fy', 
+                    markerfacecolor='none', markeredgecolor='green')
+    axes[1, 1].plot(video_timestamps, i_Fz, 'D', label='Interpolated Fz', 
+                    markerfacecolor='none', markeredgecolor='blue')
+    axes[1, 1].set_xlabel('Timestamp (s)')
+    axes[1, 1].set_title('Interpolated Forces (Fx, Fy, Fz)')
+    axes[1, 1].legend()
+
+    # Plot Torques (Tx, Ty, Tz)
+    axes[2, 0].plot(csv_timestamps, Tx, 'r-', label='Original Tx')
+    axes[2, 0].plot(csv_timestamps, Ty, 'g-', label='Original Ty')
+    axes[2, 0].plot(csv_timestamps, Tz, 'b-', label='Original Tz')
+    axes[2, 0].set_xlabel('Timestamp (s)')
+    axes[2, 0].set_ylabel('Torque (Nm)')
+    axes[2, 0].set_title('Original Torques (Tx, Ty, Tz)')
+    axes[2, 0].legend()
+
+    axes[2, 1].plot(video_timestamps, i_Tx, 'o', label='Interpolated Tx', 
+                    markerfacecolor='none', markeredgecolor='red')
+    axes[2, 1].plot(video_timestamps, i_Ty, 's', label='Interpolated Ty', 
+                    markerfacecolor='none', markeredgecolor='green')
+    axes[2, 1].plot(video_timestamps, i_Tz, 'D', label='Interpolated Tz', 
+                    markerfacecolor='none', markeredgecolor='blue')
+    axes[2, 1].set_xlabel('Timestamp (s)')
+    axes[2, 1].set_title('Interpolated Torques (Tx, Ty, Tz)')
+    axes[2, 1].legend()
+
+    plt.tight_layout()
     if save_path is not None:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"Figure saved to {save_path}")
+   
+
+
+
+    
 
 ## %%
 if __name__ == "__main__":
