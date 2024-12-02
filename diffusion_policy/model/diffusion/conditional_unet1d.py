@@ -77,11 +77,16 @@ class ConditionalUnet1D(nn.Module):
         n_groups=8,
         cond_predict_scale=False
         ):
+
+        # input_dim : 10 (= action_dim)
+        # local_cond_dim: None
+        # global_cond_dim: n_obs_steps x D
+
         super().__init__()
-        all_dims = [input_dim] + list(down_dims)
+        all_dims = [input_dim] + list(down_dims) # [10] + [512, 1024, 2048]
         start_dim = down_dims[0]
 
-        dsed = diffusion_step_embed_dim
+        dsed = diffusion_step_embed_dim # 128
         diffusion_step_encoder = nn.Sequential(
             SinusoidalPosEmb(dsed),
             nn.Linear(dsed, dsed * 4),
@@ -90,9 +95,11 @@ class ConditionalUnet1D(nn.Module):
         )
         cond_dim = dsed
         if global_cond_dim is not None:
-            cond_dim += global_cond_dim
+            cond_dim += global_cond_dim # 128 + 576 = 704
+        
+        print("cond dim: ", cond_dim)
 
-        in_out = list(zip(all_dims[:-1], all_dims[1:]))
+        in_out = list(zip(all_dims[:-1], all_dims[1:]))  # [(10, 512), (512, 1024), (1024, 2048)]
 
         local_cond_encoder = None
         if local_cond_dim is not None:
@@ -126,7 +133,7 @@ class ConditionalUnet1D(nn.Module):
         ])
 
         down_modules = nn.ModuleList([])
-        for ind, (dim_in, dim_out) in enumerate(in_out):
+        for ind, (dim_in, dim_out) in enumerate(in_out): # [(10, 512), (512, 1024), (1024, 2048)]
             is_last = ind >= (len(in_out) - 1)
             down_modules.append(nn.ModuleList([
                 ConditionalResidualBlock1D(
@@ -181,7 +188,12 @@ class ConditionalUnet1D(nn.Module):
         global_cond: (B,global_cond_dim)
         output: (B,T,input_dim)
         """
+        # B : 64
+        # T : 16
+        # input_dim : 10
+        # print("down modules:: sample: ", sample.shape) # 64, 16 , 10
         sample = einops.rearrange(sample, 'b h t -> b t h')
+        # print("down modules:: sample: ", sample.shape) # 64, 10, 16
 
         # 1. time
         timesteps = timestep
@@ -194,12 +206,14 @@ class ConditionalUnet1D(nn.Module):
         timesteps = timesteps.expand(sample.shape[0])
 
         global_feature = self.diffusion_step_encoder(timesteps)
+        # print ("global feature shape: ", global_feature.shape) # 64, 128 # global cond: B, T x D
+        # print("global cond shape: ", global_cond.shape) # 64, 2880
 
         if global_cond is not None:
             global_feature = torch.cat([
                 global_feature, global_cond
             ], axis=-1)
-        
+                
         # encode local features
         h_local = list()
         if local_cond is not None:
@@ -209,9 +223,14 @@ class ConditionalUnet1D(nn.Module):
             h_local.append(x)
             x = resnet2(local_cond, global_feature)
             h_local.append(x)
-        
+                
         x = sample
         h = []
+ 
+        # print("down modules:: x: ", x.shape) # 64, 10 , 16 
+        # print("down modules:: global feature: ", global_feature.shape) # 64, 3008 // 3008 = 128 + 2880
+        # print("down modules:: down modules: ", self.down_modules) # (10, 512)
+
         for idx, (resnet, resnet2, downsample) in enumerate(self.down_modules):
             x = resnet(x, global_feature)
             if idx == 0 and len(h_local) > 0:
@@ -222,7 +241,7 @@ class ConditionalUnet1D(nn.Module):
 
         for mid_module in self.mid_modules:
             x = mid_module(x, global_feature)
-
+        
         for idx, (resnet, resnet2, upsample) in enumerate(self.up_modules):
             x = torch.cat((x, h.pop()), dim=1)
             x = resnet(x, global_feature)

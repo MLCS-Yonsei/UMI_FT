@@ -6,6 +6,189 @@ from torch.nn import functional as F
 from torch.distributions import Normal
 
 import torch.nn as nn
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(os.path.abspath(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))))))
+
+from diffusion_policy.model.common.module_attr_mixin import ModuleAttrMixin
+import numpy as np
+
+class VTTObsEncoder(ModuleAttrMixin):
+    def __init__(self,
+                 shape_meta: dict,
+                 img_size: int = 224,
+                 img_patch_size: int = 14,
+                 in_channel: int = 3,
+                 n_emb: int = 384,
+                 n_low_emb: int = 288,
+                 n_compress_emb: int = 288,
+                 depth: int = 6,
+                 num_heads: int = 8,
+                 mlp_ratio: float = 4.0,
+                 n_sensor: int = 1, # 2 for bi-manual
+                 global_pool: str='',
+                 **kwargs
+                 ):
+        super().__init__()
+
+        # vision and f/t value -> VTT
+        # other low dim value -> key projection map
+        
+        # key list for each variables
+        self.rgb_keys = []
+        self.force_keys = []
+        self.torque_keys = []
+        self.lowdim_keys = []
+
+        # projection map for low dim value
+        self.lowdim_projections = nn.ModuleDict()
+
+        # shape map for each key
+        key_shape_map = dict()
+
+        self.shape_meta = shape_meta
+        obs_shape_meta = shape_meta['obs'] # obs_dict
+
+        for key, attr in obs_shape_meta.items():
+            shape = tuple(attr['shape'])
+            type = attr.get('type', 'low_dim')
+            key_shape_map[key] = shape
+
+            if type == 'rgb':
+                self.rgb_keys.append(key)
+
+            elif type == 'low_dim':
+                if key.endswith('force'):
+                    self.force_keys.append(key)
+                elif key.endswith('torque'):
+                    self.torque_keys.append(key)
+                else:
+                    self.lowdim_keys.append(key)
+
+        # print(f"rgb keys: {self.rgb_keys}") # rgb keys: ['camera0_rgb']
+        # print(f"force keys: {self.force_keys}") # force keys: ['robot0_force']
+        # print(f"torque keys: {self.torque_keys}") # torque keys: ['robot0_torque']
+        # print(f"lowdim keys: {self.lowdim_keys}") # lowdim keys: ['robot0_eef_pos', 'robot0_eef_rot_axis_angle', 'robot0_gripper_width']
+
+        # projection for low dim value
+        for key in self.lowdim_keys:
+            shape = obs_shape_meta[key]['shape']
+            dim = int(np.prod(shape))
+            # print(f"{key} has dim {dim}")
+            # robot0_eef_pos has dim 3
+            # robot0_eef_rot_axis_angle has dim 6
+            # robot0_gripper_width has dim 1
+            self.lowdim_projections[key] = nn.Linear(dim, n_low_emb)
+        
+        self.n_emb = n_emb
+        self.key_shape_map = key_shape_map
+        #print("key shape map: ", self.key_shape_map) 
+        # key shape map:  {'camera0_rgb': (3, 224, 224), 
+        # 'robot0_eef_pos': (3,), 
+        # 'robot0_eef_rot_axis_angle': (6,), 
+        # 'robot0_gripper_width': (1,), 
+        # 'robot0_eef_rot_axis_angle_wrt_start': (6,), 
+        # 'robot0_force': (3,), 
+        # 'robot0_torque': (3,)}
+
+
+        self.vtt_model = VTT(
+            img_size=img_size,
+            img_patch_size=img_patch_size,
+            tactile_patches=n_sensor,
+            in_channel=in_channel,
+            embed_dim=n_emb,
+            n_compress_emb=n_compress_emb,
+            depth=depth,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            qkv_bias=False,
+            qk_scale=None,
+            drop_rate=0.0,
+            attn_drop_rate=0.0,
+            drop_path_rate=0.0,
+        )
+        
+        
+    def forward(self, obs_dict):
+        # B : batch size
+        # T : temporal sequence length, the number of time steps in sequence data
+        # C : channels : 3
+        # H : height : 224
+        # W : width : 224
+        # D: data dimension, the size of the feature vector for low dimensional data
+        batch_size = next(iter(obs_dict.values())).shape[0]
+
+        # process image and force/torque
+        assert len(self.rgb_keys) == 1 # is it possible to change it to fit with image observation horizon?
+        image_key = self.rgb_keys[0] # ex: camera0_rgb, camera1_rgb (bi-manual)
+        images = obs_dict[image_key] # Shape: B, T, C, H, W
+        B, T = images.shape[:2]
+        # print(f"images T: {T}") 
+
+        force_key = self.force_keys[0]
+        forces = obs_dict[force_key] # Shape : B, T, 3
+        # print("forces shape: ", forces.shape)
+        B, T = forces.shape[:2]
+        assert B == batch_size
+        if len(forces.shape) == 2: # for last batch
+            forces = forces.unsqueeze(1) 
+        assert forces.shape[2:] == self.key_shape_map[force_key] # 3
+        # print(f"force T: {T}") 
+
+        torque_key = self.torque_keys[0]
+        torques = obs_dict[torque_key] # Shape : B, T, 3
+        # print("torques shape: ", torques.shape)
+        B, T = torques.shape[:2]
+        assert B == batch_size
+        if len(torques.shape) == 2:
+            torques = torques.unsqueeze(1) 
+        assert torques.shape[2:] == self.key_shape_map[torque_key] # 3
+        # print(f"torque T: {T}") 
+
+        tactile = torch.cat([forces, torques], dim=-1) # Shape: B, T, 6
+
+        vtt_output = self.vtt_model(images, tactile) 
+
+        # print(f"VTT output shape: {vtt_output.shape}") # Shape: B, T, n_compress_emb
+
+        # process low dim input
+        lowdim_embeddings = []
+        for key in self.lowdim_keys:
+            data = obs_dict[key] # Shape: B, T, D
+            B, T = data.shape[:2]
+            # print(f"{key} T: {T}")
+            assert B == batch_size
+            if len(data.shape) == 2:
+                data = data.unsqueeze(1)
+            else:
+                data = data.reshape(B, T, -1)
+            assert data.shape[2:] == self.key_shape_map[key]
+            emb = self.lowdim_projections[key](data) 
+            # print(f"{key} embedding shape: {emb.shape}") # Shape: B, T, n_compress_emb
+            lowdim_embeddings.append(emb)
+
+        # concatenate all features along t
+        embeddings = [vtt_output] + lowdim_embeddings
+        embeddings = torch.cat(embeddings, dim=1)
+        return embeddings
+    
+    @torch.no_grad()
+    def output_shape(self):
+        example_obs_dict = dict()
+        obs_shape_meta = self.shape_meta['obs']
+        for key, attr in obs_shape_meta.items():
+            shape = tuple(attr['shape'])
+            this_obs = torch.zeros(
+                (1, attr['horizon']) + shape, 
+                dtype=self.dtype,
+                device=self.device) # (B, T, D)
+            example_obs_dict[key] = this_obs
+        example_output = self.forward(example_obs_dict)
+        assert len(example_output.shape) == 3
+        assert example_output.shape[0] == 1
+
+        return example_output.shape
 
 
 class VTT(nn.Module):
@@ -13,9 +196,10 @@ class VTT(nn.Module):
         self,
         img_size: int = 224,
         img_patch_size: int = 14,
-        tactile_patches: int = 2,
+        tactile_patches: int = 1,
         in_channel: int = 3,
         embed_dim: int = 384,
+        n_compress_emb: int = 288,
         depth: int = 6,
         num_heads: int = 8,
         mlp_ratio: float = 4.0,
@@ -78,7 +262,7 @@ class VTT(nn.Module):
                 (img_patches + self.patch_embed.tactile_patches) * embed_dim // 12, 640
             ),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(640, 288),
+            nn.Linear(640, n_compress_emb),
         )
 
         # initialize parameters with truncated normal distribution to stabilize training
@@ -99,7 +283,9 @@ class VTT(nn.Module):
         """
         Prepare tokens for the transformer
         """
-        B, S, nc, w, h = x.shape
+        if len(x.shape) == 4:
+            x = x.unsqueeze(1)  #  [B, 1, nc, w, h]
+        B, T, nc, w, h = x.shape
         x, patched_tactile = self.patch_embed(x, tactile)  # patching image and tactile
         x = torch.cat((x, patched_tactile), dim=2)  # concatenate image and tactile
         x = x + self.interpolate_pos_encoding(x, w, h)  # add positional encoding
@@ -111,8 +297,8 @@ class VTT(nn.Module):
             x = blk(x)
         x = self.norm(x)
         img_tactile = self.compress_patches(x)  # reduce dimensionality of patches
-        B, S, patches, dim = img_tactile.size()
-        img_tactile = img_tactile.view(B, S, -1)  # flatten patches
+        B, T, patches, dim = img_tactile.size()
+        img_tactile = img_tactile.view(B, T, -1)  # flatten patches
         img_tactile = self.compress_layer(
             img_tactile
         )  # reduce dimensionality of patches
@@ -140,20 +326,20 @@ class Attention(nn.Module):
         self.proj_drop = nn.Dropout(proj_drop)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        B, S, N, C = (
+        B, T, N, C = (
             x.shape
-        )  # B: batch size, S: sequence length, N: number of patches, C: channels
+        )  # B: batch size, T: sequence length, N: number of patches, C: channels
         qkv = (
             self.qkv(x)
-            .reshape(B * S, N, 3, self.num_heads, C // self.num_heads)
-            .permute(2, 0, 3, 1, 4)  # (3, B*S, num_heads, N, C//num_heads)
+            .reshape(B * T, N, 3, self.num_heads, C // self.num_heads)
+            .permute(2, 0, 3, 1, 4)  # (3, B*T, num_heads, N, C//num_heads)
         )
         q, k, v = qkv[0], qkv[1], qkv[2]
         attn = (q @ k.transpose(-2, -1)) * self.scale
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
-        x = (attn @ v).transpose(1, 2).reshape(B, S, N, C)
-        attn = attn.view(B, S, -1, N, N)
+        x = (attn @ v).transpose(1, 2).reshape(B, T, N, C)
+        attn = attn.view(B, T, -1, N, N)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x, attn
@@ -186,16 +372,16 @@ class PatchEmbed(nn.Module):
     def forward(
         self, image: torch.Tensor, tactile: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        B, S, C, H, W = image.shape
-        image = image.view(B * S, C, H, W)
+        B, T, C, H, W = image.shape
+        image = image.view(B * T, C, H, W)
         patched_image = self.proj(image)
         patched_image = (
-            patched_image.flatten(2).transpose(1, 2).view(B, S, -1, self.embed_dim)
+            patched_image.flatten(2).transpose(1, 2).view(B, T, -1, self.embed_dim)
         )
 
-        tactile = tactile.view(B * S, -1)
+        tactile = tactile.view(B * T, -1)
         decoded_tactile = self.decode_tactile(tactile).view(
-            B, S, self.tactile_patches, -1
+            B, T, self.tactile_patches, -1
         )
         return patched_image, decoded_tactile
 
@@ -323,25 +509,39 @@ def _no_grad_trunc_normal_(
 
 def test_vtt_forward():
     batch_size = 1
-    sequence_length = 5
+    sequence_length = 2
     channels = 3
     img_height = 224
     img_width = 224
     tactile_dim = 6
+    lowvar_dim = 10 # 3 + 6 + 1
 
-    synthetic_images = torch.randn(
-        batch_size, sequence_length, channels, img_height, img_width
-    )
+    obs_dict = {
+        'camera0_rgb': torch.randn(batch_size, sequence_length, channels, img_height, img_width),
+        'robot0_force': torch.randn(batch_size, sequence_length, 3),
+        'robot0_torque': torch.randn(batch_size, sequence_length, 3),
+        'robot0_eef_pos': torch.randn(batch_size, sequence_length, 3),
+        'robot0_eef_rot_axis_angle': torch.randn(batch_size, sequence_length, 6),
+        'robot0_gripper_width': torch.randn(batch_size, sequence_length, 1),
+    }
 
-    synthetic_tactile = torch.randn(batch_size, sequence_length, tactile_dim)
+    shape_meta = {
+        'obs': {
+            'camera0_rgb': {'shape': [3, 224, 224], 'type': 'rgb'},
+            'robot0_force': {'shape': [3], 'type': 'low_dim'},
+            'robot0_torque': {'shape': [3], 'type': 'low_dim'},
+            'robot0_eef_pos': {'shape': [3], 'type': 'low_dim'},
+            'robot0_eef_rot_axis_angle': {'shape': [6], 'type': 'low_dim'},
+            'robot0_gripper_width': {'shape': [1], 'type': 'low_dim'},
+        }
+    }
 
-    encoder = VTT()
+    encoder = VTTObsEncoder(shape_meta=shape_meta)
+    embeddings = encoder(obs_dict)
 
-    img_tactile = encoder(synthetic_images, synthetic_tactile)
-
-    print("img_tactile feature shape:", img_tactile.shape)
+    print("Embeddings shape:", embeddings.shape)
     print("test done!")
 
 
-if __name__ == "__main__":
-    test_vtt_forward()
+# if __name__ == "__main__":
+#     test_vtt_forward()

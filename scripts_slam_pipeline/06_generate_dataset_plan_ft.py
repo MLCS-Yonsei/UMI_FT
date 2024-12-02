@@ -730,7 +730,7 @@ def main(input, output, tcp_offset, tx_slam_tag,
             
             
             gripper_timestamps = gripper_df['timestamp'].to_numpy()
-            gripper_widths = gripper_df['width'].to_numpy()
+            gripper_widths = gripper_df['width_origin'].to_numpy()
 
 
             # offset calculation
@@ -903,11 +903,11 @@ def main(input, output, tcp_offset, tx_slam_tag,
                         "demo_end_pose": demo_end_poses[cam_idx],
 
                         "Fx": all_Fx_values[cam_idx][start:end],
-                        "Fy": all_Fx_values[cam_idx][start:end],
-                        "Fz": all_Fx_values[cam_idx][start:end],
-                        "Tx": all_Fx_values[cam_idx][start:end],
-                        "Ty": all_Fx_values[cam_idx][start:end],
-                        "Tz": all_Fx_values[cam_idx][start:end]
+                        "Fy": all_Fy_values[cam_idx][start:end],
+                        "Fz": all_Fz_values[cam_idx][start:end],
+                        "Tx": all_Tx_values[cam_idx][start:end],
+                        "Ty": all_Ty_values[cam_idx][start:end],
+                        "Tz": all_Tz_values[cam_idx][start:end]
 
                     })
                 # all cams

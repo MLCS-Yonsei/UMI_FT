@@ -101,7 +101,7 @@ class UmiDatasetFT(BaseDataset):
             if type == 'rgb':
                 rgb_keys.append(key)
             elif type == 'low_dim':
-                lowdim_keys.append(key)
+                lowdim_keys.append(key) # SC: F/T is appended to lowdim_keys
 
             if key.endswith('eef_pos'):
                 self.num_robot += 1
@@ -133,7 +133,7 @@ class UmiDatasetFT(BaseDataset):
         self.sampler_lowdim_keys = list()
         for key in lowdim_keys:
             if not 'wrt' in key:
-                self.sampler_lowdim_keys.append(key)
+                self.sampler_lowdim_keys.append(key) # SC: F/T is appended to sampler_lowdim_keys
     
         for key in replay_buffer.keys():
             if key.endswith('_demo_start_pose') or key.endswith('_demo_end_pose'):
@@ -142,7 +142,7 @@ class UmiDatasetFT(BaseDataset):
                 key_horizon[key] = shape_meta['obs'][query_key]['horizon']
                 key_latency_steps[key] = shape_meta['obs'][query_key]['latency_steps']
                 key_down_sample_steps[key] = shape_meta['obs'][query_key]['down_sample_steps']
-
+                
         sampler = SequenceSampler(
             shape_meta=shape_meta,
             replay_buffer=replay_buffer,
@@ -272,7 +272,7 @@ class UmiDatasetFT(BaseDataset):
             obs_dict[key] = np.moveaxis(data[key], -1, 1).astype(np.float32) / 255.
             # T,C,H,W
             del data[key]
-        for key in self.sampler_lowdim_keys:
+        for key in self.sampler_lowdim_keys: # SC: cahnge F/T value to in sampler_lowdim_keys
             obs_dict[key] = data[key].astype(np.float32)
             del data[key]
         

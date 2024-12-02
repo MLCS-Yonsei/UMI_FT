@@ -2,21 +2,29 @@ defaults:
   - _self_
   - task: umi_ft
 
-name: train_diffusion_transformer_timm
-_target_: diffusion_policy.workspace.train_diffusion_transformer_timm_workspace.TrainDiffusionTransformerTimmWorkspace
+name: train_diffusion_unet_timm
+_target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace_ft.TrainDiffusionUnetImageWorkspaceFT
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "default"
 
+horizon: 16
+n_obs_steps: 2
 n_action_steps: 8
-n_emb: 384 # original: 768 
+n_latency_steps: 0
+dataset_obs_steps: ${n_obs_steps}
+past_action_visible: False
+keypoint_visible_rate: 1.0
+obs_as_global_cond: True
 
+# For VTT
+n_emb: 384 
 n_compress_emb: 288
 n_sensor: 1
 
 policy:
-  _target_: diffusion_policy.policy.diffusion_transformer_timm_policy.DiffusionTransformerTimmPolicyFT
+  _target_: diffusion_policy.policy.diffusion_unet_image_policy_ft.DiffusionUnetImagePolicyFT
 
   shape_meta: ${shape_meta}
   
@@ -34,13 +42,8 @@ policy:
     prediction_type: epsilon # or sample
 
   obs_encoder:
-    _target_: diffusion_policy.model.vision.transformer_obs_encoder.TransformerObsEncoder_FT
+    _target_: diffusion_policy.model.vision.transformer_obs_encoder_FT.VTTObsEncoder
     shape_meta: ${shape_meta}
-    global_pool: ''
-    n_emb: ${n_emb}
-
-    n_compress_emb: ${n_compress_emb} # for compressing layer of VTT
-    n_sensor: ${n_sensor} # for VTT
 
     ##### from scratch #####
     # model_name: 'vit_base_patch16_224'
@@ -58,8 +61,13 @@ policy:
     pretrained: True
     frozen: False
 
-    # 'cls' or 'avg' or 'max' or 'soft_attention' or 'spatial_embedding' or 'transformer' or 'attention_pool_2d'
-    feature_aggregation: null
+    
+    global_pool: ''
+
+    # 'avg' or 'max' or 'soft_attention' or 'spatial_embedding' or 'transformer' or 'attention_pool_2d'
+    feature_aggregation: 'attention_pool_2d'
+    # feature_aggregation: null
+    position_encording: 'sinusoidal' # 'learnable' or 'sinusoidal'. it only works for transformer
 
     # it only works for resnet. 32 (7x7) or 16 (14x14)
     downsample_ratio: 32
@@ -67,11 +75,12 @@ policy:
     transforms:
       - type: RandomCrop
         ratio: 0.95
-      - _target_: torchvision.transforms.RandomRotation
-        degrees:
-          - -5.0
-          - 5.0
-        expand: false
+      # RandomRotation is not compatible with BF16
+      # - _target_: torchvision.transforms.RandomRotation
+      #   degrees:
+      #     - -5.0
+      #     - 5.0
+      #   expand: false
       - _target_: torchvision.transforms.ColorJitter
         brightness: 0.3
         contrast: 0.4
@@ -95,14 +104,19 @@ policy:
 
     use_group_norm: True
     share_rgb_model: False
+    imagenet_norm: True
 
   num_inference_steps: 16
+  obs_as_global_cond: True
+  diffusion_step_embed_dim: 128
+  down_dims: [256,512,1024]
+  kernel_size: 5
+  n_groups: 8
+  cond_predict_scale: True
   input_pertub: 0.1 # reference: https://github.com/forever208/DDPM-IP
-  n_layer: 7
-  n_head: 8
-  n_emb: ${n_emb}
-  p_drop_attn: 0.1
-  
+  # train multiple diffusion steps per obs encoder forward pass
+  # doing this too much will cause instability!
+  train_diffusion_n_samples: 1
 
 ema:
   _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
@@ -113,26 +127,40 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 64
+  batch_size: 16
   num_workers: 8
   shuffle: True
   pin_memory: True
   persistent_workers: True
 
 val_dataloader:
-  batch_size: 64
+  batch_size: 16
   num_workers: 8
   shuffle: False
   pin_memory: True
   persistent_workers: True
 
+# dataloader:
+#   batch_size: 64
+#   num_workers: 16
+#   shuffle: True
+#   pin_memory: True
+#   persistent_workers: True
+
+# val_dataloader:
+#   batch_size: 64
+#   num_workers: 16
+#   shuffle: False
+#   pin_memory: True
+#   persistent_workers: True
+
 optimizer:
+  _target_: torch.optim.AdamW
   lr: 3.0e-4
-  weight_decay: 1.0e-6
-  obs_encoder_lr: 3.0e-5
-  obs_encoder_weight_decay: 1.0e-6
   betas: [0.95, 0.999]
-  
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
 training:
   device: "cuda:0"
   seed: 42
@@ -141,7 +169,7 @@ training:
   # optimization
   lr_scheduler: cosine
   lr_warmup_steps: 2000
-  num_epochs: 200
+  num_epochs: 120
   gradient_accumulate_every: 1
   # EMA destroys performance when used with BatchNorm
   # replace BatchNorm with GroupNorm.

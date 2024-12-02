@@ -40,7 +40,7 @@ register_codecs()
 @click.option('-of', '--out_fov', type=float, default=None)
 @click.option('-cl', '--compression_level', type=int, default=99)
 @click.option('-nm', '--no_mirror', is_flag=True, default=False, help="Disable mirror observation by masking them out")
-@click.option('-ms', '--mirror_swap', is_flag=True, default=False)
+@click.option('-ms', '--mirror_swap', is_flag=True, default=True)
 @click.option('-n', '--num_workers', type=int, default=None)
 def main(input, output, out_res, out_fov, compression_level, 
          no_mirror, mirror_swap, num_workers):
@@ -77,16 +77,28 @@ def main(input, output, out_res, out_fov, compression_level,
     buffer_start = 0
     all_videos = set()
     vid_args = list()
+
+    
     for ipath in input:
         ipath = pathlib.Path(os.path.expanduser(ipath)).absolute()
         demos_path = ipath.joinpath('demos')
         plan_path = ipath.joinpath('dataset_plan.pkl') 
+        # SC: dataset_plan = list of dict, each dict represent each video and gripper data
+        # {
+        # "episode_timestamps": demo_timestamps[start:end] <numpy.arange>
+        #
+        #  "grippers": dict()
+        #               key: tcp_pose, gripper_width, demo_start_pose, demo_end_pose, Fx ~ Tz
+        #
+        #  "cameras": dict()
+        #               key: video_path, video_start_end
+        # }
         if not plan_path.is_file():
             print(f"Skipping {ipath.name}: no dataset_plan.pkl")
             continue
         
         plan = pickle.load(plan_path.open('rb'))
-        
+
         videos_dict = defaultdict(list)
         for plan_episode in plan:
             grippers = plan_episode['grippers']
@@ -113,6 +125,19 @@ def main(input, output, out_res, out_fov, compression_level,
                 demo_start_pose[:] = gripper['demo_start_pose']
                 demo_end_pose = np.empty_like(eef_pose)
                 demo_end_pose[:] = gripper['demo_end_pose']
+
+
+                Fx = gripper["Fx"]
+                Fy = gripper["Fy"]
+                Fz = gripper["Fz"]
+                force = np.column_stack((Fx, Fy, Fz)).astype(np.float32)
+
+                Tx = gripper["Tx"]
+                Ty = gripper["Ty"]
+                Tz = gripper["Tz"]
+                torque = np.column_stack((Tx, Ty, Tz)).astype(np.float32)
+
+
                 
                 robot_name = f'robot{gripper_id}'
                 episode_data[robot_name + '_eef_pos'] = eef_pos.astype(np.float32)
@@ -120,7 +145,16 @@ def main(input, output, out_res, out_fov, compression_level,
                 episode_data[robot_name + '_gripper_width'] = np.expand_dims(gripper_widths, axis=-1).astype(np.float32)
                 episode_data[robot_name + '_demo_start_pose'] = demo_start_pose
                 episode_data[robot_name + '_demo_end_pose'] = demo_end_pose
-            
+                
+                # episode_data[robot_name + '_Fx'] = Fx
+                # episode_data[robot_name + '_Fy'] = Fy
+                # episode_data[robot_name + '_Fz'] = Fz
+                # episode_data[robot_name + '_Tx'] = Tx
+                # episode_data[robot_name + '_Ty'] = Ty
+                # episode_data[robot_name + '_Tz'] = Tz
+                episode_data[robot_name + '_force'] = force
+                episode_data[robot_name + '_torque'] = torque
+
 
             out_replay_buffer.add_episode(data=episode_data, compressors=None)
             
@@ -148,7 +182,9 @@ def main(input, output, out_res, out_fov, compression_level,
         vid_args.extend(videos_dict.items())
         all_videos.update(videos_dict.keys())
     
+
     print(f"{len(all_videos)} videos used in total!")
+
     
     # get image size
     with av.open(vid_args[0][0]) as container:
@@ -269,6 +305,8 @@ def main(input, output, out_res, out_fov, compression_level,
             store=zip_store
         )
     print(f"Done! {len(all_videos)} videos used in total!")
+
+
 
 # %%
 if __name__ == "__main__":
