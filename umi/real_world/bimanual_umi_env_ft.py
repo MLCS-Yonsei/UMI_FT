@@ -8,7 +8,7 @@ from multiprocessing.managers import SharedMemoryManager
 from umi.real_world.rtde_interpolation_controller import RTDEInterpolationController
 from umi.real_world.wsg_controller import WSGController
 from umi.real_world.gripper_controller import GripperController
-from umi.real_world.ft_sensor import FTSensor
+from umi.real_world.ft_sensor import FTSensorController
 from umi.real_world.franka_interpolation_controller import FrankaInterpolationController
 from umi.real_world.multi_uvc_camera import MultiUvcCamera, VideoRecorder
 from diffusion_policy.common.timestamp_accumulator import (
@@ -49,6 +49,7 @@ class BimanualUmiFTEnv:
             camera_down_sample_steps=1,
             robot_down_sample_steps=1,
             gripper_down_sample_steps=1,
+            sensor_down_sample_steps=1,
             # all in steps (relative to frequency)
             camera_obs_horizon=2,
             robot_obs_horizon=2,
@@ -215,8 +216,7 @@ class BimanualUmiFTEnv:
 
         robots: List[RTDEInterpolationController] = list()
         grippers: List[GripperController] = list() # SC: We can integate gripper and robot
-        sensors: List[FTSensor] = list()
-
+        sensors: List[FTSensorController] = list()
 
 
         for rc in robots_config:
@@ -256,22 +256,42 @@ class BimanualUmiFTEnv:
             robots.append(this_robot)
 
         for gc in grippers_config:
-            this_gripper = WSGController(
+            # this_gripper = WSGController(
+            #     shm_manager=shm_manager,
+            #     hostname=gc['gripper_ip'],
+            #     port=gc['gripper_port'],
+            #     receive_latency=gc['gripper_obs_latency'],
+            #     use_meters=True
+            # )
+
+            this_gripper = GripperController(
                 shm_manager=shm_manager,
-                hostname=gc['gripper_ip'],
-                port=gc['gripper_port'],
+                robot_ip=gc['gripper_ip'],
                 receive_latency=gc['gripper_obs_latency'],
-                use_meters=True
             )
 
             grippers.append(this_gripper)
+        
+        for sc in sensors_config:
+            this_sensor = FTSensorController(
+                shm_manager=shm_manager,
+                sensor_ip=sc['sensor_ip'],
+                udp_port=sc['udp_port'],
+                receive_latency=sc['sensor_obs_latency']
+
+            )
+            sensors.append(this_sensor)
 
         self.camera = camera
         
         self.robots = robots
         self.robots_config = robots_config
+
         self.grippers = grippers
         self.grippers_config = grippers_config
+
+        self.sensors = sensors
+        self.sensors_config = sensors_config
 
         self.multi_cam_vis = multi_cam_vis
         self.frequency = frequency
@@ -283,9 +303,11 @@ class BimanualUmiFTEnv:
         self.camera_down_sample_steps = camera_down_sample_steps
         self.robot_down_sample_steps = robot_down_sample_steps
         self.gripper_down_sample_steps = gripper_down_sample_steps
+        self.sensor_down_sample_steps = sensor_down_sample_steps
         self.camera_obs_horizon = camera_obs_horizon
         self.robot_obs_horizon = robot_obs_horizon
         self.gripper_obs_horizon = gripper_obs_horizon
+        self.sensor_obs_horizon = sesnor_obs_horizon
         # recording
         self.output_dir = output_dir
         self.video_dir = video_dir
@@ -384,12 +406,17 @@ class BimanualUmiFTEnv:
         # both have more than n_obs_steps data
         last_robots_data = list()
         last_grippers_data = list()
+        last_sensors_data = list()
         # 125/500 hz, robot_receive_timestamp
         for robot in self.robots:
             last_robots_data.append(robot.get_all_state())
         # 30 hz, gripper_receive_timestamp
         for gripper in self.grippers:
             last_grippers_data.append(gripper.get_all_state())
+        # 1000 hz, sensor_receive_timestamp
+        for sensor in self.sensors:
+            last_sensors_data.append(sensor.get_all_state())
+
 
         # select align_camera_idx
         num_obs_cameras = len(self.robots)
@@ -466,6 +493,20 @@ class BimanualUmiFTEnv:
 
             # update obs_data
             obs_data.update(gripper_obs)
+        
+        # align sensor obs
+        sensor_obs_timestamps = last_timestamp - (
+            np.arange(self.sensor_obs_horizon)[::-1] * self.sensor_down_sample_steps * dt)
+        for robot_idx, last_sensor_data in enumerate(last_sensors_data):
+            # align sensor obs
+            sensor_interpolator = get_interp1d(
+                t=last_sensor_data['ft_timestamp'],
+                x=last_sensor_data['FT'])
+            sensor_obs = {
+                f'robot{robot_idx}_ft_sensor': sensor_interpolator(sensor_obs_timestamps)
+            }
+            obs_data.update(sensor_obs)
+
 
         # accumulate obs
         if self.obs_accumulator is not None:
@@ -485,6 +526,14 @@ class BimanualUmiFTEnv:
                         f'robot{robot_idx}_gripper_width': last_gripper_data['gripper_position'][...,None]
                     },
                     timestamps=last_gripper_data['gripper_timestamp']
+                )
+            
+            for robot_idx, last_sensor_data in enumerate(last_sensors_data):
+                self.obs_accumulator.put(
+                    data={
+                        f'robot{robot_idx}_ft_sensor' : last_sensor_data['FT']
+                    },
+                    timestamps=last_sensor_data['ft_timestamp']
                 )
 
         return obs_data
