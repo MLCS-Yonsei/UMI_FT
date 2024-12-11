@@ -154,7 +154,7 @@ def main(input, output, robot_config,
         ckpt_path = os.path.join(ckpt_path, 'checkpoints', 'latest.ckpt')
     payload = torch.load(open(ckpt_path, 'rb'), map_location='cpu', pickle_module=dill)
     cfg = payload['cfg']
-    print("model_name:", cfg.policy.obs_encoder.model_name)
+    # print("model_name:", cfg.policy.obs_encoder.model_name) # SC: our yaml does not have model name attribute
     print("dataset_path:", cfg.task.dataset.dataset_path)
 
     # setup experiment
@@ -288,7 +288,7 @@ def main(input, output, robot_config,
                 target_pose = np.stack([rs['TargetTCPPose'] for rs in robot_states])
 
                 gripper_states = env.get_gripper_state()
-                gripper_target_pos = np.asarray([gs['gripper_position'] for gs in gripper_states])
+                gripper_target_pos = np.asarray([gs['gripper_width'] for gs in gripper_states])
                                 
                 control_robot_idx_list = [0]
 

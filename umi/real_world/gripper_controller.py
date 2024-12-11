@@ -35,7 +35,7 @@ class GripperController(mp.Process):
         # Build input queue
         example = {
             'cmd': GripperCommand.SCHEDULE_OPEN.value,
-            'timestamp': 0.0
+            'target_time': 0.0
         }
         self.input_queue = SharedMemoryQueue.create_from_examples(
             shm_manager=shm_manager,
@@ -45,7 +45,7 @@ class GripperController(mp.Process):
 
         # Build ring buffer for state (if needed)
         example_state = {
-            'gripper_state': False,  # False for closed, True for open
+            'gripper_width': 0,  # False for closed, True for open
             'gripper_timestamp': time.time()
         }
         self.ring_buffer = SharedMemoryRingBuffer.create_from_examples(
@@ -69,7 +69,7 @@ class GripperController(mp.Process):
     def stop(self, wait=True):
         message = {
             'cmd': GripperCommand.STOP.value,
-            'timestamp': time.time()
+            'target_time': time.time()
         }
         self.input_queue.put(message)
         if wait:
@@ -149,7 +149,7 @@ class GripperController(mp.Process):
                     commands = self.input_queue.get_all()
                     n_cmd = len(commands['cmd'])
                 except Empty:
-                    pass
+                    n_cmd = 0
 
                 # Process incoming commands
                 for i in range(n_cmd):
@@ -199,7 +199,7 @@ class GripperController(mp.Process):
 
                 # Update gripper state (if needed)
                 state = {
-                    'gripper_position': gripper_state,
+                    'gripper_width': gripper_state,
                     'gripper_timestamp': time.time() - self.receive_latency
                 }
                 self.ring_buffer.put(state)

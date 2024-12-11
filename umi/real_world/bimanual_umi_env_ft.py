@@ -495,7 +495,7 @@ class BimanualUmiFTEnv:
             # align gripper obs
             gripper_interpolator = get_interp1d(
                 t=last_gripper_data['gripper_timestamp'],
-                x=last_gripper_data['gripper_position'][...,None]
+                x=last_gripper_data['gripper_width'][...,None]
             )
             gripper_obs = {
                 f'robot{robot_idx}_gripper_width': gripper_interpolator(gripper_obs_timestamps)
@@ -537,7 +537,7 @@ class BimanualUmiFTEnv:
             for robot_idx, last_gripper_data in enumerate(last_grippers_data):
                 self.obs_accumulator.put(
                     data={
-                        f'robot{robot_idx}_gripper_width': last_gripper_data['gripper_position'][...,None]
+                        f'robot{robot_idx}_gripper_width': last_gripper_data['gripper_width'][...,None]
                     },
                     timestamps=last_gripper_data['gripper_timestamp']
                 )
@@ -690,6 +690,18 @@ class BimanualUmiFTEnv:
                         x=np.array(self.obs_accumulator.data[f'robot{robot_idx}_gripper_width'])
                     )
                     episode[f'robot{robot_idx}_gripper_width'] = gripper_interpolator(timestamps)
+                    
+                    force_interpolator = get_interp1d(
+                        t=np.array(self.obs_accumulator.timestamps[f'robot{robot_idx}_force']),
+                        x=np.array(self.obs_accumulator.data[f'robot{robot_idx}_force']),
+                    )
+                    episode[f'robot{robot_idx}_force'] = force_interpolator(timestamps)
+                    
+                    torque_interpolator = get_interp1d(
+                        t=np.array(self.obs_accumulator.timestamps[f'robot{robot_idx}_torque']),
+                        x=np.array(self.obs_accumulator.data[f'robot{robot_idx}_torque']),
+                    )
+                    episode[f'robot{robot_idx}_torque'] = torque_interpolator(timestamps)
 
                 self.replay_buffer.add_episode(episode, compressors='disk')
                 episode_id = self.replay_buffer.n_episodes - 1
