@@ -40,6 +40,8 @@ class TrainDiffusionUnetImageWorkspaceFT(BaseWorkspace):
     def __init__(self, cfg: OmegaConf, output_dir=None):
         super().__init__(cfg, output_dir=output_dir)
 
+        print(output_dir)
+
         # set seed
         seed = cfg.training.seed
         torch.manual_seed(seed)

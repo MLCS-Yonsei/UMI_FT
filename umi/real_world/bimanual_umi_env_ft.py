@@ -215,7 +215,7 @@ class BimanualUmiFTEnv:
 
 
         robots: List[RTDEInterpolationController] = list()
-        grippers: List[GripperController] = list() # SC: We can integate gripper and robot
+        grippers: List[GripperController] = list() 
         sensors: List[FTSensorController] = list()
 
 
@@ -329,6 +329,8 @@ class BimanualUmiFTEnv:
             ready_flag = ready_flag and robot.is_ready
         for gripper in self.grippers:
             ready_flag = ready_flag and gripper.is_ready
+        for sensor in self.sensors:
+            ready_flag = ready_flag and sensor.is_ready
         return ready_flag
     
     def start(self, wait=True):
@@ -337,6 +339,8 @@ class BimanualUmiFTEnv:
             robot.start(wait=False)
         for gripper in self.grippers:
             gripper.start(wait=False)
+        for sensor in self.sensors:
+            sensor.start(wait=False)
 
         if self.multi_cam_vis is not None:
             self.multi_cam_vis.start(wait=False)
@@ -351,6 +355,8 @@ class BimanualUmiFTEnv:
             robot.stop(wait=False)
         for gripper in self.grippers:
             gripper.stop(wait=False)
+        for sensor in self.sensors:
+            sensor.stop(wait=False)
         self.camera.stop(wait=False)
         if wait:
             self.stop_wait()
@@ -361,6 +367,8 @@ class BimanualUmiFTEnv:
             robot.start_wait()
         for gripper in self.grippers:
             gripper.start_wait()
+        for sensor in self.sensors:
+            sensor.start_wait()
         if self.multi_cam_vis is not None:
             self.multi_cam_vis.start_wait()
     
@@ -369,6 +377,8 @@ class BimanualUmiFTEnv:
             robot.stop_wait()
         for gripper in self.grippers:
             gripper.stop_wait()
+        for sensor in self.sensors:
+            sensor.stop_wait()
         self.camera.stop_wait()
         if self.multi_cam_vis is not None:
             self.multi_cam_vis.stop_wait()
@@ -499,11 +509,15 @@ class BimanualUmiFTEnv:
             np.arange(self.sensor_obs_horizon)[::-1] * self.sensor_down_sample_steps * dt)
         for robot_idx, last_sensor_data in enumerate(last_sensors_data):
             # align sensor obs
-            sensor_interpolator = get_interp1d(
+            force_interpolator = get_interp1d(
                 t=last_sensor_data['ft_timestamp'],
-                x=last_sensor_data['FT'])
+                x=last_sensor_data['force'])
+            torque_interpolator = get_interp1d(
+                t=last_sensor_data['ft_timestamp'],
+                x=last_sensor_data['torque'])
             sensor_obs = {
-                f'robot{robot_idx}_ft_sensor': sensor_interpolator(sensor_obs_timestamps)
+                f'robot{robot_idx}_force': force_interpolator(sensor_obs_timestamps),
+                f'robot{robot_idx}_torque': torque_interpolator(sensor_obs_timestamps),
             }
             obs_data.update(sensor_obs)
 
@@ -531,7 +545,8 @@ class BimanualUmiFTEnv:
             for robot_idx, last_sensor_data in enumerate(last_sensors_data):
                 self.obs_accumulator.put(
                     data={
-                        f'robot{robot_idx}_ft_sensor' : last_sensor_data['FT']
+                        f'robot{robot_idx}_force' : last_sensor_data['force'],
+                        f'robot{robot_idx}_torque' : last_sensor_data['torque'],
                     },
                     timestamps=last_sensor_data['ft_timestamp']
                 )
@@ -568,7 +583,7 @@ class BimanualUmiFTEnv:
                     pose=r_actions,
                     target_time=new_timestamps[i] - r_latency
                 )
-
+                print("gripper actions: ", g_actions)
                 if g_actions >= 0.5:
                     gripper.schedule_open(target_time=new_timestamps[i]- g_latency)
                 else:

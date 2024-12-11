@@ -11,7 +11,7 @@
       "height_threshold": -0.024,
       # sphere collision primitive size and location for inter-gripper collision avoidance
       # 0 to disable
-      "sphere_radius": 0.1, "sphere_center": [0, -0.06, -0.185]
+      "sphere_radius": 0, "sphere_center": [0, -0.06, -0.185]
     },
     # {
     #   "robot_type": "ur5",
@@ -24,8 +24,10 @@
   # gripper configurations, 0->right 1->left // WE DO NOT NEED GRIPPER CONFIGURATION! -> how about add min, max, baudrate value in here?
   "grippers": [
     {
-      # "gripper_ip": "192.168.0.18",
-      # "gripper_port": 1000, "gripper_obs_latency": 0.01, "gripper_action_latency": 0.1,
+      "gripper_ip": "192.168.3.168", # same with robot ip
+      # "gripper_port": 1000, 
+      "gripper_obs_latency": 0.01, 
+      "gripper_action_latency": 0.1,
       "min_position": 0,
       "max_position": 4096,
       "baudrate": 1000000
@@ -39,11 +41,11 @@
   "sensors": [
     {
       "sensor_ip": "192.168.2.220",
-      "sesnor_port:" 8990, "sensor_obs_latency": 0.001, 
+      "udp_port:" 8890, "sensor_obs_latency": 0.001, 
     },
     # {
     #   "sensor_ip": "192.168.2.220",
-    #   "sesnor_port:" 8990, "sensor_obs_latency": 0.001, 
+    #   "sesnor_port:" 8890, "sensor_obs_latency": 0.001, 
     # },
 
 

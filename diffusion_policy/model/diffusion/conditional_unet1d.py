@@ -97,8 +97,6 @@ class ConditionalUnet1D(nn.Module):
         if global_cond_dim is not None:
             cond_dim += global_cond_dim # 128 + 576 = 704
         
-        print("cond dim: ", cond_dim)
-
         in_out = list(zip(all_dims[:-1], all_dims[1:]))  # [(10, 512), (512, 1024), (1024, 2048)]
 
         local_cond_encoder = None

@@ -49,6 +49,8 @@ from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from umi.common.precise_sleep import precise_wait
 from umi.real_world.bimanual_umi_env import BimanualUmiEnv
+from umi.real_world.bimanual_umi_env_ft import BimanualUmiFTEnv
+
 from umi.real_world.keystroke_counter import (
     KeystrokeCounter, Key, KeyCode
 )
@@ -131,7 +133,8 @@ def main(input, output, robot_config,
     frequency, command_latency, 
     no_mirror, sim_fov, camera_intrinsics, mirror_swap):
     
-    max_gripper_width = 0.09 # used for clipping gripper width, in our case it will be max position
+    max_gripper_width = 1 # used for clipping gripper width, in our case it will be max position
+    min_gripper_width = 0
     gripper_speed = 0.2 # used for calculating delta_pos
     
     # load robot config file
@@ -143,6 +146,7 @@ def main(input, output, robot_config,
     
     robots_config = robot_config_data['robots']
     grippers_config = robot_config_data['grippers']
+    sensors_config = robot_config['sensors']
 
     # load checkpoint
     ckpt_path = input
@@ -170,16 +174,18 @@ def main(input, output, robot_config,
         )
 
     print("steps_per_inference:", steps_per_inference)
-    with SharedMemoryManager() as shm_manager: # Shaered Memeory Manager : inter process communication
-        # Spacemouse : handle input from the spacemouse device
-        # keystroke counter : capture keyboard events for control
-        # bi manual umi env : robot env handling interactions with the real robot
-        with Spacemouse(shm_manager=shm_manager) as sm, \
-            KeystrokeCounter() as key_counter, \
-            BimanualUmiEnv(
+    # Shaered Memeory Manager : inter process communication
+    # Spacemouse : handle input from the spacemouse device
+    # keystroke counter : capture keyboard events for control
+    # bi manual umi env : robot env handling interactions with the real robot
+    with SharedMemoryManager() as shm_manager:  
+    # SC: I think we do not need spacemouse
+        with KeystrokeCounter() as key_counter, \
+            BimanualUmiFTEnv(
                 output_dir=output,
                 robots_config=robots_config,
                 grippers_config=grippers_config,
+                sensors_config=sensors_config,
                 frequency=frequency,
                 obs_image_resolution=obs_res,
                 obs_float32=True,
@@ -193,8 +199,7 @@ def main(input, output, robot_config,
                 robot_obs_horizon=cfg.task.shape_meta.obs.robot0_eef_pos.horizon,
                 gripper_obs_horizon=cfg.task.shape_meta.obs.robot0_gripper_width.horizon,
 
-                force_obs_horizon=cfg.task.shape_meta.obs.robot0_force.horizon,
-                torque_obs_horizon=cfg.task.shape_meta.obs.robot0_torque.horizon,
+                sensor_obs_horizon=cfg.task.shape_meta.obs.robot0_force.horizon,
 
                 no_mirror=no_mirror,
                 fisheye_converter=fisheye_converter,
@@ -241,8 +246,8 @@ def main(input, output, robot_config,
             if cfg.training.use_ema:
                 policy = workspace.ema_model
             policy.num_inference_steps = 16 # DDIM inference iterations
-            obs_pose_rep = cfg.task.pose_repr.obs_pose_repr
-            action_pose_repr = cfg.task.pose_repr.action_pose_repr
+            obs_pose_rep = cfg.task.pose_repr.obs_pose_repr # relative
+            action_pose_repr = cfg.task.pose_repr.action_pose_repr # relative
             print('obs_pose_rep', obs_pose_rep)
             print('action_pose_repr', action_pose_repr)
 
@@ -284,7 +289,7 @@ def main(input, output, robot_config,
 
                 gripper_states = env.get_gripper_state()
                 gripper_target_pos = np.asarray([gs['gripper_position'] for gs in gripper_states])
-                
+                                
                 control_robot_idx_list = [0]
 
                 t_start = time.monotonic()
@@ -385,31 +390,17 @@ def main(input, output, robot_config,
                             control_robot_idx_list = [0]
                         elif key_stroke == KeyCode(char='2'):
                             control_robot_idx_list = [1]
+                        elif key_stroke == KeyCode(char='o'): # O
+                            for robot_idx in control_robot_idx_list:
+                                gripper_target_pos[robot_idx] = max_gripper_width
+                        elif key_stroke == KeyCode(char='x'): # X
+                            for robot_idx in control_robot_idx_list:
+                                gripper_target_pos[robot_idx] = min_gripper_width
 
                     if start_policy:
                         break
 
                     precise_wait(t_sample)
-                    # get teleop command
-                    sm_state = sm.get_motion_state_transformed()
-                    # print(sm_state)
-                    dpos = sm_state[:3] * (0.5 / frequency)
-                    drot_xyz = sm_state[3:] * (1.5 / frequency)
-
-                    drot = st.Rotation.from_euler('xyz', drot_xyz)
-                    for robot_idx in control_robot_idx_list:
-                        target_pose[robot_idx, :3] += dpos
-                        target_pose[robot_idx, 3:] = (drot * st.Rotation.from_rotvec(
-                            target_pose[robot_idx, 3:])).as_rotvec()
-
-                    dpos = 0
-                    if sm.is_button_pressed(0):
-                        # close gripper
-                        dpos = -gripper_speed / frequency
-                    if sm.is_button_pressed(1):
-                        dpos = gripper_speed / frequency
-                    for robot_idx in control_robot_idx_list:
-                        gripper_target_pos[robot_idx] = np.clip(gripper_target_pos[robot_idx] + dpos, 0, max_gripper_width)
 
                     # solve collision with table
                     for robot_idx in control_robot_idx_list:

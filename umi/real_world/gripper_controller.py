@@ -137,7 +137,7 @@ class GripperController(mp.Process):
             keep_running = True
             t_start = time.monotonic()
             iter_idx = 0
-            gripper_state = True # Assume gripper starts opened
+            gripper_state = 1 # Assume gripper starts opened
 
             scheduled_commands = [] # we use digital command which means we can not use interpolation
 
@@ -182,14 +182,14 @@ class GripperController(mp.Process):
                             # Open the gripper
                             rtde_io.setToolDigitalOut(0, True)   # Tool DO0 HIGH
                             rtde_io.setToolDigitalOut(1, False)  # Tool DO1 LOW
-                            gripper_state = True
+                            gripper_state = 1
                             if self.verbose:
                                 print("[GripperController] Gripper opened.")
                         elif command['cmd'] == GripperCommand.CLOSE.value:
                             # Close the gripper
                             rtde_io.setToolDigitalOut(0, False)  # Tool DO0 LOW
                             rtde_io.setToolDigitalOut(1, True)   # Tool DO1 HIGH
-                            gripper_state = False
+                            gripper_state = 0
                             if self.verbose:
                                 print("[GripperController] Gripper closed.")
                     else:
@@ -199,7 +199,7 @@ class GripperController(mp.Process):
 
                 # Update gripper state (if needed)
                 state = {
-                    'gripper_state': gripper_state,
+                    'gripper_position': gripper_state,
                     'gripper_timestamp': time.time() - self.receive_latency
                 }
                 self.ring_buffer.put(state)

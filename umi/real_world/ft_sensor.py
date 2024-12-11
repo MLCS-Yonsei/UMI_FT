@@ -51,7 +51,8 @@ class FTSensorController(mp.Process):
         
         # build ring buffer
         example_state = {
-            'FT': np.zeros((6,), dtype=np.float64),
+            'force': np.zeros((3,), dtype=np.float64),
+            'torque': np.zeros((3,), dtype=np.float64),
             'ft_receive_timestamp': time.time(),
             'ft_timestamp': time.time()
         }
@@ -103,15 +104,6 @@ class FTSensorController(mp.Process):
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop()
         
-    # ========= command methods ============
-    def schedule_waypoint(self, pos: float, target_time: float):
-        message = {
-            'cmd': Command.SCHEDULE_WAYPOINT.value,
-            'target_pos': pos,
-            'target_time': target_time
-        }
-        self.input_queue.put(message)
-    
     # ========= receive APIs =============
     def get_state(self, k=None, out=None):
         if k is None:
@@ -157,13 +149,16 @@ class FTSensorController(mp.Process):
                     if len(data) == 52:
                         unpacked_data = struct.unpack('>13f', data)
                         Fx, Fy, Fz, Tx, Ty, Tz, Ax, Ay, Az, Gx, Gy, Gz, Temp = unpacked_data
-                        ft = np.array([Fx, Fy, Fz, Tx, Ty, Tz, Ax, Ay, Az, Gx, Gy, Gz])
+                        force = np.array([Fx, Fy, Fz])
+                        torque = np.array([Tx, Ty, Tz])
                         # Build state dictionary
                         state = {
-                            'FT': ft,
+                            'force': force,
+                            'torque': torque,
                             'ft_receive_timestamp': t_receive,
                             'ft_timestamp': t_receive - self.receive_latency
                         }
+                        print("FT sensor state: ", state)
                         self.ring_buffer.put(state)
                     else:
                         if self.verbose:
