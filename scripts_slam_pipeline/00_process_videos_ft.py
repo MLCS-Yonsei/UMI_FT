@@ -19,6 +19,8 @@ from umi.common.timecode_util import mp4_get_start_datetime
 import datetime
 import pandas as pd
 
+import numpy as np
+
 # %%
 @click.command(help='Session directories. Assumming mp4 videos are in <session_dir>/raw_videos')
 @click.argument('session_dir', nargs=-1)
@@ -93,6 +95,19 @@ def main(session_dir):
         with ExifToolHelper() as et:
             for mp4_path in input_mp4_paths:
                 if mp4_path.is_symlink():
+                    start_date = mp4_get_start_datetime(str(mp4_path))
+                    meta = list(et.get_metadata(str(mp4_path)))[0]
+                    cam_serial = meta['QuickTime:CameraSerialNumber']
+                    out_dname = 'demo_' + cam_serial + '_' + start_date.strftime(r"%Y.%m.%d_%H.%M.%S.%f")
+
+                    this_out_dir = output_dir.joinpath(out_dname)
+
+                    if mp4_path.name.startswith('mapping') or mp4_path.name.startswith('gripper_cal') or mp4_path.parent.name.startswith('gripper_cal'):
+                        pass
+                    else:
+                        video_datetime_to_outdir[start_date] = this_out_dir
+                        video_datetimes.append(start_date)
+
                     print(f"Skipping {mp4_path.name}, already moved.")
                     continue
 
@@ -126,11 +141,15 @@ def main(session_dir):
 
         ###############################################################################################
                 # Store the video direction
-                video_datetime_to_outdir[start_date] = this_out_dir
-                video_datetimes.append(start_date)
+                if mp4_path.name.startswith('mapping') or mp4_path.name.startswith('gripper_cal') or mp4_path.parent.name.startswith('gripper_cal'):
+                    pass
+                else:
+                    video_datetime_to_outdir[start_date] = this_out_dir
+                    video_datetimes.append(start_date)
 
         # Sort video datetimes
         video_datetimes.sort()
+
         ###############################################################################################
 
         csv_datetimes = []
@@ -146,10 +165,30 @@ def main(session_dir):
                 print(f"Skipping {csv_path.name}, already moved.")
                 continue
             
+            numeric_columns = ['timestamp', 'Fx', 'Fy', 'Fz', 'Tx', 'Ty', 'Tz', 'width', 'width_origin', 'minW', 'maxW']
+            
             # Filter ill rows
             print(f"Filtering {csv_path.name}")
-            df = pd.read_csv(csv_path, encoding='latin1')
-            numeric_columns = ['timestamp', 'Fx', 'Fy', 'Fz', 'Tx', 'Ty', 'Tz', 'width', 'width_origin', 'minW', 'maxW']
+            # df = pd.read_csv(csv_path, encoding='latin1')
+            with open(csv_path, 'r', encoding='latin1') as f:
+                lines = f.readlines()
+
+            valid_lines = []
+            expected_columns = len(numeric_columns)  # Set this to the expected number of fields
+            for l, line in enumerate(lines):
+                if len(line.split(',')) == expected_columns:
+                    valid_lines.append(line)
+                else:
+                    print(f"Skipping row {l+1}: {line.strip()} (unexpected field count)")
+            
+            # Save cleaned data back to a temporary file
+            temp_cleaned_path = csv_path.parent / f"temp_{csv_path.name}"
+            with open(temp_cleaned_path, 'w', encoding='latin1') as f:
+                f.writelines(valid_lines)
+
+            # Read the cleaned CSV
+            df = pd.read_csv(temp_cleaned_path, encoding='latin1')
+            
             for col in numeric_columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
             corrupted_rows = df[df.isnull().any(axis=1)]
@@ -158,6 +197,12 @@ def main(session_dir):
             df_interpolated = df_cleaned.interpolate(method='linear', limit_direction='both', axis=0)
             df_interpolated.to_csv(csv_path, index=False)
             print(f"Filtering succeed")
+
+            try:
+                os.remove(temp_cleaned_path)
+                print(f"Temporary file {temp_cleaned_path} deleted successfully.")
+            except OSError as e:
+                print(f"Error deleting temporary file {temp_cleaned_path}: {e}")
 
 
             # move F/T sensor and gripper width csv file
@@ -179,18 +224,8 @@ def main(session_dir):
                 print(f"Could not parse datetime from csv file name {csv_filename}")
                 continue
             
-            # Find the closest video datetime
-            #closest_video_datetime = min(video_datetimes, key=lambda vd: abs(vd - csv_datetime))
-            # for vd in video_datetimes
-            # vd_diff = abs(vd - csv_datetime)
-            # closest_video_datetime = argmin(vd_diff_list) in video_datetimes
-            #time_diff = abs(closest_video_datetime - csv_datetime)
-            #if time_diff.total_seconds() > 60:
-            #    print(f"Warning: csv file {csv_filename} time differs from closest video by {time_diff}")
-            #    continue
-            
-            #this_out_dir = video_datetime_to_outdir[closest_video_datetime]
-            this_out_dir = video_datetime_to_outdir[video_datetimes[i + 2]]
+
+            this_out_dir = video_datetime_to_outdir[video_datetimes[i]]
             print(f"Pair with {this_out_dir}")
             cfname = 'ft_sensor_gripper_width.csv'
             out_csv_path = this_out_dir.joinpath(cfname)

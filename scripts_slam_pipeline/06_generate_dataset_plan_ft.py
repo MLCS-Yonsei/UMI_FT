@@ -730,7 +730,8 @@ def main(input, output, tcp_offset, tx_slam_tag,
             
             
             gripper_timestamps = gripper_df['timestamp'].to_numpy()
-            gripper_widths = gripper_df['width_origin'].to_numpy()
+            # gripper_widths = gripper_df['width_origin'].to_numpy()
+            gripper_widths = gripper_df['width'].to_numpy()
 
 
             # offset calculation
