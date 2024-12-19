@@ -39,15 +39,17 @@ def runner(cmd, cwd, stdout_path, stderr_path, timeout, **kwargs):
 @click.command()
 @click.option('-i', '--input_dir', required=True, help='Directory for demos folder')
 @click.option('-m', '--map_path', default=None, help='ORB_SLAM3 *.osa map atlas file')
-@click.option('-d', '--docker_image', default="usam205/custom_orb_slam:latest") # chicheng/orb_slam3:latest
+@click.option('-d', '--docker_image', default="usam205/custom_orb_slam_v4:latest") # chicheng/orb_slam3:latest
 @click.option('-n', '--num_workers', type=int, default=None)
 @click.option('-ml', '--max_lost_frames', type=int, default=60)
 @click.option('-tm', '--timeout_multiple', type=float, default=16, help='timeout_multiple * duration = timeout')
 @click.option('-np', '--no_docker_pull', is_flag=True, default=False, help="pull docker image from docker hub")
 def main(input_dir, map_path, docker_image, num_workers, max_lost_frames, timeout_multiple, no_docker_pull):
     input_dir = pathlib.Path(os.path.expanduser(input_dir)).absolute()
-    input_video_dirs = [x.parent for x in input_dir.glob('demo*/raw_video.mp4')]
-    input_video_dirs += [x.parent for x in input_dir.glob('map*/raw_video.mp4')]
+    # input_video_dirs = [x.parent for x in input_dir.glob('demo*/raw_video.mp4')]
+    # input_video_dirs += [x.parent for x in input_dir.glob('map*/raw_video.mp4')]
+    input_video_dirs = [x.parent for x in input_dir.glob('demo*/raw_video.mov')]
+    input_video_dirs += [x.parent for x in input_dir.glob('map*/raw_video.mov')]
     print(f'Found {len(input_video_dirs)} video dirs')
     
     if map_path is None:
@@ -85,13 +87,15 @@ def main(input_dir, map_path, docker_image, num_workers, max_lost_frames, timeou
                 # softlink won't work in bind volume
                 mount_target = pathlib.Path('/data')
                 csv_path = mount_target.joinpath('camera_trajectory.csv')
-                video_path = mount_target.joinpath('raw_video.mp4')
+                # video_path = mount_target.joinpath('raw_video.mp4')
+                video_path = mount_target.joinpath('raw_video.mov')
                 json_path = mount_target.joinpath('imu_data.json')
                 mask_path = mount_target.joinpath('slam_mask.png')
                 mask_write_path = video_dir.joinpath('slam_mask.png')
                 
                 # find video duration
-                with av.open(str(video_dir.joinpath('raw_video.mp4').absolute())) as container:
+                # with av.open(str(video_dir.joinpath('raw_video.mp4').absolute())) as container:
+                with av.open(str(video_dir.joinpath('raw_video.mov').absolute())) as container:
                     video = container.streams.video[0]
                     duration_sec = float(video.duration * video.time_base)
                 timeout = duration_sec * timeout_multiple
@@ -115,7 +119,7 @@ def main(input_dir, map_path, docker_image, num_workers, max_lost_frames, timeou
                     '/ORB_SLAM3/Examples/Monocular-Inertial/gopro_slam',
                     '--vocabulary', '/ORB_SLAM3/Vocabulary/ORBvoc.txt',
                     # '--setting', '/ORB_SLAM3/Examples/Monocular-Inertial/gopro10_maxlens_fisheye_setting_v1_720.yaml',
-                    '--setting', '/ORB_SLAM3/Examples/Monocular-Inertial/gopro13_maxlens_fisheye_setting.yaml',
+                    '--setting', '/ORB_SLAM3/Examples/Monocular-Inertial/gopro13_maxlens_fisheye_setting_v4.yaml',
                     '--input_video', str(video_path),
                     '--input_imu_json', str(json_path),
                     '--output_trajectory_csv', str(csv_path),

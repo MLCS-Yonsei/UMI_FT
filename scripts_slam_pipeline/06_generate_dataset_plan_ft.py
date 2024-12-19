@@ -152,7 +152,8 @@ def main(input, output, tcp_offset, tx_slam_tag,
     # output: video_meta_df
     
     # find videos
-    video_dirs = sorted([x.parent for x in demos_dir.glob('demo_*/raw_video.mp4')])
+    # video_dirs = sorted([x.parent for x in demos_dir.glob('demo_*/raw_video.mp4')])
+    video_dirs = sorted([x.parent for x in demos_dir.glob('demo_*/raw_video.mov')])
 
     # ignore camera
     ignore_cam_serials = set()
@@ -164,15 +165,16 @@ def main(input, output, tcp_offset, tx_slam_tag,
     rows = list() # SC: each row represents video meta data
     with ExifToolHelper() as et:
         for video_dir in video_dirs:  # SC: each video directory represents each video folder
-            mp4_path = video_dir.joinpath('raw_video.mp4')
-            meta = list(et.get_metadata(str(mp4_path)))[0]
-            cam_serial = meta['QuickTime:CameraSerialNumber']
+            # mp4_path = video_dir.joinpath('raw_video.mp4')
+            mp4_path = video_dir.joinpath('raw_video.mov')
+            # meta = list(et.get_metadata(str(mp4_path)))[0]
+            # cam_serial = meta['QuickTime:CameraSerialNumber']
             start_date = mp4_get_start_datetime(str(mp4_path)) 
             start_timestamp = start_date.timestamp() # SC: Unix timestamp of the video
 
-            if cam_serial in ignore_cam_serials:
-                print(f"Ignored {video_dir.name}")
-                continue
+            # if cam_serial in ignore_cam_serials:
+            #     print(f"Ignored {video_dir.name}")
+            #     continue
             
             csv_path = video_dir.joinpath('camera_trajectory.csv')
             if not csv_path.is_file():
@@ -198,7 +200,8 @@ def main(input, output, tcp_offset, tx_slam_tag,
             
             rows.append({
                 'video_dir': video_dir,
-                'camera_serial': cam_serial,
+                # 'camera_serial': cam_serial,
+                'camera_serial': "GoPro13",
                 'start_date': start_date,
                 'n_frames': n_frames,
                 'fps': fps,
@@ -222,10 +225,11 @@ def main(input, output, tcp_offset, tx_slam_tag,
     #     "end_timestamp": float
     # }
     # map serial to count
-    serial_count = video_meta_df['camera_serial'].value_counts()
-    print("Found following cameras:")
-    print(serial_count)
-    n_cameras = len(serial_count)
+    # serial_count = video_meta_df['camera_serial'].value_counts()
+    # print("Found following cameras:")
+    # print(serial_count)
+    # n_cameras = len(serial_count)
+    n_cameras = 1
     
     events = list()
     for vid_idx, row in video_meta_df.iterrows():
@@ -917,7 +921,8 @@ def main(input, output, tcp_offset, tx_slam_tag,
                 video_dir = row['video_dir']
                 vid_start_frame = cam_start_frame_idxs[cam_idx]
                 cameras.append({
-                    "video_path": str(video_dir.joinpath('raw_video.mp4').relative_to(video_dir.parent)),
+                    # "video_path": str(video_dir.joinpath('raw_video.mp4').relative_to(video_dir.parent)),
+                    "video_path": str(video_dir.joinpath('raw_video.mov').relative_to(video_dir.parent)),
                     "video_start_end": (start+vid_start_frame, end+vid_start_frame)
                 })
             

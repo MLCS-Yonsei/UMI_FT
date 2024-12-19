@@ -25,12 +25,14 @@ from umi.common.cv_util import draw_predefined_mask
 @click.command()
 @click.option('-i', '--input_dir', required=True, help='Directory for mapping video')
 @click.option('-m', '--map_path', default=None, help='ORB_SLAM3 *.osa map atlas file')
-@click.option('-d', '--docker_image', default="chicheng/orb_slam3:latest") #chicheng/orb_slam3:latest  # usam205/custom_orb_slam_v2:latest
+@click.option('-d', '--docker_image', default="usam205/custom_orb_slam_v4:latest") #chicheng/orb_slam3:latest  # usam205/custom_orb_slam_v2:latest
 @click.option('-np', '--no_docker_pull', is_flag=True, default=False, help="pull docker image from docker hub")
 @click.option('-nm', '--no_mask', is_flag=True, default=False, help="Whether to mask out gripper and mirrors. Set if map is created with bare GoPro no on gripper.")
 def main(input_dir, map_path, docker_image, no_docker_pull, no_mask):
     video_dir = pathlib.Path(os.path.expanduser(input_dir)).absolute()
-    for fn in ['raw_video.mp4', 'imu_data.json']:
+    # for fn in ['raw_video.mp4', 'imu_data.json']:
+    #     assert video_dir.joinpath(fn).is_file()
+    for fn in ['raw_video.mov', 'imu_data.json']:
         assert video_dir.joinpath(fn).is_file()
 
     if map_path is None:
@@ -54,7 +56,8 @@ def main(input_dir, map_path, docker_image, no_docker_pull, no_mask):
 
     mount_target = pathlib.Path('/data')
     csv_path = mount_target.joinpath('mapping_camera_trajectory.csv')
-    video_path = mount_target.joinpath('raw_video.mp4')
+    # video_path = mount_target.joinpath('raw_video.mp4')
+    video_path = mount_target.joinpath('raw_video.mov')
     json_path = mount_target.joinpath('imu_data.json')
     mask_path = mount_target.joinpath('slam_mask.png')
     if not no_mask:
@@ -68,8 +71,24 @@ def main(input_dir, map_path, docker_image, no_docker_pull, no_mask):
     map_mount_target = pathlib.Path('/map').joinpath(map_mount_source.name)
 
 
-    # yaml_path = "/ORB_SLAM3/Examples/Monocular-Inertial/gopro13_maxlens_fisheye_setting_v4.yaml"
-    yaml_path = "/ORB_SLAM3/Examples/Monocular-Inertial/gopro10_maxlens_fisheye_setting_v1_720.yaml"
+    yaml_path = "/ORB_SLAM3/Examples/Monocular-Inertial/gopro13_maxlens_fisheye_setting_v4.yaml"
+    # yaml_path = "/ORB_SLAM3/Examples/Monocular-Inertial/gopro10_maxlens_fisheye_setting_v1_720.yaml"
+
+    check_cmd = [
+    'docker',
+    'run',
+    '--rm',
+    docker_image,
+    'test', '-f', yaml_path  # Check if the file exists
+    ]
+
+    try:
+        print("Checking if the YAML file exists in the container...")
+        subprocess.run(check_cmd, check=True)
+        print("YAML file found. Proceeding to run SLAM.")
+    except subprocess.CalledProcessError:
+        print(f"Error: YAML file '{yaml_path}' does not exist in the container!")
+        exit(1)
 
     # run SLAM
     cmd = [

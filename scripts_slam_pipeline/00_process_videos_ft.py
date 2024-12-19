@@ -21,6 +21,8 @@ import pandas as pd
 
 import numpy as np
 
+import subprocess
+
 # %%
 @click.command(help='Session directories. Assumming mp4 videos are in <session_dir>/raw_videos')
 @click.argument('session_dir', nargs=-1)
@@ -81,10 +83,16 @@ def main(session_dir):
                 print(f"Selected {path.name} for camera serial {serial}")
                 out_path = gripper_cal_dir.joinpath(path.name)
                 shutil.move(path, out_path)
+        
+        # Post-process videos
+        for mp4_path in list(input_dir.glob("**/*.MP4")) + list(input_dir.glob("**/*.mp4")):
+            post_process_video(mp4_path)
 
         # look for mp4 video in all subdirectories in input_dir
-        input_mp4_paths = list(input_dir.glob('**/*.MP4')) + list(input_dir.glob('**/*.mp4'))
-        print(f'Found {len(input_mp4_paths)} MP4 videos')
+        # input_mp4_paths = list(input_dir.glob('**/*.MP4')) + list(input_dir.glob('**/*.mp4'))
+        input_mp4_paths = list(input_dir.glob('**/*.MOV')) + list(input_dir.glob('**/*.mov'))
+        # print(f'Found {len(input_mp4_paths)} MP4 videos')
+        print(f'Found {len(input_mp4_paths)} MOV videos')
 
         ###############################################################################################
         # look for video directories in demos
@@ -97,8 +105,9 @@ def main(session_dir):
                 if mp4_path.is_symlink():
                     start_date = mp4_get_start_datetime(str(mp4_path))
                     meta = list(et.get_metadata(str(mp4_path)))[0]
-                    cam_serial = meta['QuickTime:CameraSerialNumber']
-                    out_dname = 'demo_' + cam_serial + '_' + start_date.strftime(r"%Y.%m.%d_%H.%M.%S.%f")
+                    # cam_serial = meta['QuickTime:CameraSerialNumber']
+                    # out_dname = 'demo_' + cam_serial + '_' + start_date.strftime(r"%Y.%m.%d_%H.%M.%S.%f")
+                    out_dname = 'demo_' + start_date.strftime(r"%Y.%m.%d_%H.%M.%S.%f")
 
                     this_out_dir = output_dir.joinpath(out_dname)
 
@@ -113,21 +122,24 @@ def main(session_dir):
 
                 start_date = mp4_get_start_datetime(str(mp4_path))
                 meta = list(et.get_metadata(str(mp4_path)))[0]
-                cam_serial = meta['QuickTime:CameraSerialNumber']
-                out_dname = 'demo_' + cam_serial + '_' + start_date.strftime(r"%Y.%m.%d_%H.%M.%S.%f")
+                # cam_serial = meta['QuickTime:CameraSerialNumber']
+                # out_dname = 'demo_' + cam_serial + '_' + start_date.strftime(r"%Y.%m.%d_%H.%M.%S.%f")
+                out_dname = 'demo_' + start_date.strftime(r"%Y.%m.%d_%H.%M.%S.%f")
 
                 # special folders
                 if mp4_path.name.startswith('mapping'):
                     out_dname = "mapping"
                 elif mp4_path.name.startswith('gripper_cal') or mp4_path.parent.name.startswith('gripper_cal'):
-                    out_dname = "gripper_calibration_" + cam_serial + '_' + start_date.strftime(r"%Y.%m.%d_%H.%M.%S.%f")
+                    # out_dname = "gripper_calibration_" + cam_serial + '_' + start_date.strftime(r"%Y.%m.%d_%H.%M.%S.%f")
+                    out_dname = "gripper_calibration_" + start_date.strftime(r"%Y.%m.%d_%H.%M.%S.%f")
                 
                 # create directory
                 this_out_dir = output_dir.joinpath(out_dname)
                 this_out_dir.mkdir(parents=True, exist_ok=True)
                 
                 # move videos
-                vfname = 'raw_video.mp4'
+                # vfname = 'raw_video.mp4'
+                vfname = 'raw_video.mov'
                 out_video_path = this_out_dir.joinpath(vfname)
                 shutil.move(mp4_path, out_video_path)
 
@@ -238,6 +250,38 @@ def main(session_dir):
             symlink_path = os.path.join(dots, rel_path)
             csv_path.symlink_to(symlink_path)
         ###############################################################################################
+
+def post_process_video(video_path):
+    print(f"Post-processing video: {video_path}")
+    # output_path = video_path.with_name(f"temp_{video_path.name}")
+    output_path = video_path.with_suffix(".mov")
+
+    
+    command = [
+        "ffmpeg",
+        "-i", str(video_path),
+        "-map", "0",
+        "-map_metadata", "0",
+        "-c:v", "libx264",
+        "-vf", "fps=60",
+        "-preset", "medium",
+        "-crf", "23",       
+        "-c:a", "copy",
+        "-c:s", "copy",      
+        str(output_path)
+    ]
+    
+    try:
+        subprocess.run(command, check=True)
+        print(f"Processed video saved as {output_path}")
+        print(f"Replaced original video with processed video: {video_path}")
+        # output_path.replace(video_path)
+    except subprocess.CalledProcessError as e:
+        print(f"Error processing video {video_path}: {e}")
+        if output_path.exists():
+            output_path.unlink()
+
+
 
 # %%
 if __name__ == '__main__':
