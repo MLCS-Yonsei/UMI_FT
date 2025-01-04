@@ -4,6 +4,7 @@ import warnings
 import math
 from torch.nn import functional as F
 from torch.distributions import Normal
+from torchvision.models import resnet18, ResNet18_Weights
 
 import torch.nn as nn
 import sys
@@ -361,9 +362,22 @@ class PatchEmbed(nn.Module):
         )  # 16 * 16 = 256
         self.img_size = img_size
         self.embed_dim = embed_dim
-        self.proj = nn.Conv2d(
-            in_channel, embed_dim, kernel_size=img_patch_size, stride=img_patch_size
+        # self.proj = nn.Conv2d(
+        #     in_channel, embed_dim, kernel_size=img_patch_size, stride=img_patch_size
+        # )
+        
+        # for image embedding
+        self.resnet = resnet18(weights=ResNet18_Weights.DEFAULT)
+        self.resnet = nn.Sequential(*list(self.resnet.children())[:-2])  # remove the last two layers(adaptiveavgpool and fc)
+        self.conv_transpose = nn.ConvTranspose2d(
+            in_channels=512,
+            out_channels=embed_dim,
+            kernel_size=3,
+            stride=2,
+            padding=0,
+            output_padding=1
         )
+        
         self.tactile_patches = tactile_patches
         self.decode_tactile = nn.Sequential(
             nn.Linear(tactile_dim, self.tactile_patches * embed_dim)
@@ -374,10 +388,15 @@ class PatchEmbed(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         B, T, C, H, W = image.shape
         image = image.view(B * T, C, H, W)
-        patched_image = self.proj(image)
-        patched_image = (
-            patched_image.flatten(2).transpose(1, 2).view(B, T, -1, self.embed_dim)
-        )
+        # patched_image = self.proj(image)
+        # patched_image = (
+        #     patched_image.flatten(2).transpose(1, 2).view(B, T, -1, self.embed_dim)
+        # )
+        
+        # image embedding
+        patched_image = self.resnet(image)  # (B*T, 512, 7, 7)
+        patched_image = self.conv_transpose(patched_image)  # (B*T, 384, 16, 16)
+        patched_image = patched_image.flatten(2).transpose(1, 2).view(B, T, -1, self.embed_dim)  # (B, T, 256, 384)
 
         tactile = tactile.view(B * T, -1)
         decoded_tactile = self.decode_tactile(tactile).view(
