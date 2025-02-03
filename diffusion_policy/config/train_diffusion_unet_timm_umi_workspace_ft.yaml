@@ -1,18 +1,30 @@
 defaults:
   - _self_
-  - task: umi
+  - task: umi_ft
 
 name: train_diffusion_unet_timm
-_target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
+_target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace_ft.TrainDiffusionUnetImageWorkspaceFT
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "default"
 
+horizon: 16
+n_obs_steps: 2
 n_action_steps: 8
+n_latency_steps: 0
+dataset_obs_steps: ${n_obs_steps}
+past_action_visible: False
+keypoint_visible_rate: 1.0
+obs_as_global_cond: True
+
+# For VTT
+n_emb: 384 
+n_compress_emb: 288
+n_sensor: 1
 
 policy:
-  _target_: diffusion_policy.policy.diffusion_unet_timm_policy.DiffusionUnetTimmPolicy
+  _target_: diffusion_policy.policy.diffusion_unet_image_policy_ft.DiffusionUnetImagePolicyFT
 
   shape_meta: ${shape_meta}
   
@@ -30,7 +42,7 @@ policy:
     prediction_type: epsilon # or sample
 
   obs_encoder:
-    _target_: diffusion_policy.model.vision.timm_obs_encoder.TimmObsEncoder
+    _target_: diffusion_policy.model.vision.transformer_obs_encoder_FT.VTTObsEncoder
     shape_meta: ${shape_meta}
 
     ##### from scratch #####

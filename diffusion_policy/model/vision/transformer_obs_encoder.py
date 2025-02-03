@@ -8,6 +8,10 @@ import torch.nn.functional as F
 import torchvision
 import logging
 
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(os.path.abspath(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))))))
+
 from diffusion_policy.model.common.module_attr_mixin import ModuleAttrMixin
 
 from diffusion_policy.common.pytorch_util import replace_submodules
@@ -266,6 +270,7 @@ class TransformerObsEncoder(ModuleAttrMixin):
             B, T = img.shape[:2]
             assert B == batch_size
             assert img.shape[2:] == self.key_shape_map[key]
+            print(f"images T: {T}") 
             img = img.reshape(B*T, *img.shape[2:])
             img = self.key_transform_map[key](img)
             raw_feature = self.key_model_map[key](img)
@@ -274,6 +279,7 @@ class TransformerObsEncoder(ModuleAttrMixin):
             assert len(emb.shape) == 3 and emb.shape[0] == B * T and emb.shape[-1] == self.n_emb
             emb = emb.reshape(B,-1,self.n_emb)
             embeddings.append(emb)
+            print(f"Vision output shape: {emb.shape}")
 
         # process lowdim input
         for key in self.low_dim_keys:
@@ -281,13 +287,16 @@ class TransformerObsEncoder(ModuleAttrMixin):
             B, T = data.shape[:2]
             assert B == batch_size
             assert data.shape[2:] == self.key_shape_map[key]
+            print(f"{key} T: {T}")
             data = data.reshape(B,T,-1)
             emb = self.key_projection_map[key](data)
             assert emb.shape[-1] == self.n_emb
+            print(f"low dim output shape: {emb.shape}")
             embeddings.append(emb)
         
         # concatenate all features along t
         result = torch.cat(embeddings, dim=1)
+        print(f"output shape: {result.shape}")
         return result
 
     @torch.no_grad()
@@ -313,7 +322,7 @@ def test():
     from omegaconf import OmegaConf
     OmegaConf.register_new_resolver("eval", eval, replace=True)
 
-    with hydra.initialize('../diffusion_policy/config'):
+    with hydra.initialize('../../config'):
         cfg = hydra.compose('train_diffusion_transformer_umi_workspace')
         OmegaConf.resolve(cfg)
 
@@ -321,3 +330,8 @@ def test():
     encoder = TransformerObsEncoder(
         shape_meta=shape_meta
     )
+    output_shape = encoder.output_shape()
+    print(output_shape)
+
+if __name__=="__main__":
+    test()

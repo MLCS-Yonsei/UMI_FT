@@ -188,7 +188,7 @@ class MultiImageObsEncoder(ModuleAttrMixin):
             this_obs = torch.zeros(
                 (batch_size,) + shape, 
                 dtype=self.dtype,
-                device=self.device)
+                device=self.device) # (B, D)
             example_obs_dict[key] = this_obs
         example_output = self.forward(example_obs_dict)
         output_shape = example_output.shape[1:]
