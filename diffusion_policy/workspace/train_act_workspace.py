@@ -176,9 +176,7 @@ class TrainACTWorkspace(BaseWorkspace):
                     policy.eval()
                     epoch_dicts = []
                     for batch_idx, batch in enumerate(val_dataloader):
-                        # TODO : convert batch as data
-                        image, qpos, action, is_pad = batch
-                        forward_dict = policy(image, qpos, action, is_pad)
+                        forward_dict = policy(batch)
                         epoch_dicts.append(forward_dict)
                     
                     # validation summary
@@ -207,11 +205,8 @@ class TrainACTWorkspace(BaseWorkspace):
                     # device transfer
                     batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
 
-                    # compute loss # TODO : convert batch as data
-                    image, qpos, action, is_pad = batch
-
                     # forward dict is a loss dict
-                    forward_dict = self.model(image, qpos, action, is_pad)
+                    forward_dict = self.model(batch)
                     loss = forward_dict['loss']
                     loss.backward()
 

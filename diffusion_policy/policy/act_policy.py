@@ -33,10 +33,38 @@ class ACTPolicy(nn.Module):
         print(f'KL Weight {self.kl_weight}')
 
         self.obs_encoder = ... # self.model.cls_embed, self.model.encoder_action_proj, self.model.joint_proj
+        self.normalizer = LinearNormalizer()
+
+        # define observation keys
+        self.rgb_keys = []
+        self.force_keys = []
+        self.torque_keys = []
+        self.lowdim_keys = []
+
+        obs_shape_meta = shape_meta['obs']
+        key_shape_map = dict()
+
+        for key, attr in obs_shape_meta.items():
+            shape = tuple(attr['shape'])
+            type = attr.get('type', 'low_dim')
+            key_shape_map[key] = shape
+
+            if type == 'rgb':
+                self.rgb_keys.append(key)
+            elif type == 'low_dim':
+                if key.endswith('force'):
+                    self.force_keys.append(key)
+                elif key.endswith('torque'):
+                    self.torque_keys.append(key)
+                else:
+                    self.lowdim_keys.append(key)
+
 
     
-    def __call__(self, qpos, image, actions=None, is_pad=None):
+    def __call__(self, obs_dict):
         '''
+            input : dict type batch data
+
             data = {
 
                 'obs' : obs_dict <torch.from_numpy>
@@ -56,17 +84,54 @@ class ACTPolicy(nn.Module):
                 - concat ([ action_pose , action_gripper ])
                 - action_pose : 10d
                 - action_gripper : 1d
+            
+            model : DETRVAE
+
+                - forward ( qpos, image, env_state, actions=None, is_pad=None )
+                    qpos: batch, qpos_dim
+                    image: batch, num_cam, channel, height, width
+                    env_state: None
+                    actions: batch, seq, action_dim
+            
+            B : batch size
+            T : temporal sequence length, the number of time steps in sequence data
+            C : channels : 3
+            H : height : 224
+            W : width : 224
+            D: data dimension, the size of the feature vector for low dimensional data
 
         '''
         env_state = None
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                         std=[0.229, 0.224, 0.225])
-        image = normalize(image)
-        if actions is not None: # training time
-            actions = actions[:, :self.model.num_queries]
+        images = None
+
+        # process inputs including bi-manual case
+        for key in self.rgb_keys:
+            images = obs_dict[key]
+        
+        for key in self.lowdim_keys:
+            low_dim_data = obs_dict[key]
+        
+        for key in self.force_keys:
+            force_data = obs_dict[key]
+        
+        for key in self.torque_keys:
+            torque_data = obs_dict[key]
+        
+        # normalize input
+        nobs = self.normalizer.normalize(obs_dict['obs'])
+        nactions = self.normalizer['action'].normalize(obs_dict['action'])
+        batch_size = nactions.shape[0]
+        horizon = nactions.shape[1]
+
+        if nactions is not None: # training time
+            actions = nactions[:, :self.model.num_queries]
             is_pad = is_pad[:, :self.model.num_queries]
 
-            a_hat, is_pad_hat, (mu, logvar) = self.model(qpos, image, env_state, actions, is_pad)
+            a_hat, is_pad_hat, (mu, logvar) = self.model(low_dim_data, images, env_state, actions, is_pad)
+
+            # TODO : change model architecture for force and torque
+            # a_hat, is_pad_hat, (mu, logvar) = self.model(low_dim_data, images, force_data, torque_data, env_state, actions, is_pad)
+            
             total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)
             loss_dict = dict()
             all_l1 = F.l1_loss(actions, a_hat, reduction='none')
@@ -75,10 +140,29 @@ class ACTPolicy(nn.Module):
             loss_dict['kl'] = total_kld[0]
             loss_dict['loss'] = loss_dict['l1'] + loss_dict['kl'] * self.kl_weight
             return loss_dict
+        
         else: # inference time
-            a_hat, _, (_, _) = self.model(qpos, image, env_state) # no action, sample from prior
+            a_hat, _, (_, _) = self.model(low_dim_data, images, env_state) # no action, sample from prior
             return a_hat
     
     def configure_optimizers(self):
         return self.optimizer
-    
+
+    def set_normalizer(self, normalizer: LinearNormalizer):
+        self.normalizer.load_state_dict(normalizer.state_dict())
+
+
+def kl_divergence(mu, logvar):
+    batch_size = mu.size(0)
+    assert batch_size != 0
+    if mu.data.ndimension() == 4:
+        mu = mu.view(mu.size(0), mu.size(1))
+    if logvar.data.ndimension() == 4:
+        logvar = logvar.view(logvar.size(0), logvar.size(1))
+
+    klds = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
+    total_kld = klds.sum(1).mean(0, True)
+    dimension_wise_kld = klds.mean(0)
+    mean_kld = klds.mean(1).mean(0, True)
+
+    return total_kld, dimension_wise_kld, mean_kld
