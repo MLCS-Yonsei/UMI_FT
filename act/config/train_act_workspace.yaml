@@ -1,0 +1,122 @@
+defaults:
+  - _self_
+  - task: act
+
+name: train_act
+_target_: act.workspace.train_act_workspace.TrainACTWorkspace
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "default"
+
+# for ACT
+eval: false
+onscreen_render: false
+policy_class: "ACT"             
+task_name: 
+temporal_agg: false
+state_dim: 14
+chunk_size: 100
+
+
+policy:
+  _target_: act.policy.act_policy.ACTPolicy
+  lr: 0.00001
+  kl_weight: 10
+  lr_backbone: 0.00001
+
+  num_heads: 8
+  shape_meta: ${shape_meta}
+  state_dim: $(state_dim)
+
+  # Backbone
+  backbone: "resnet18"
+  dilation: "store_true"
+  position_embedding: "sine"
+  camera_names: ["top"] # assume uni-manual
+
+  # Transformer
+  encoder_layers: 4
+  decoder_layers: 7
+  dim_feedforward: 3200
+  hidden_dim: 512
+  drop_out: 0.1
+  num_queries: $(chunk_size) # chunk size
+  pre_norm: "store_true"
+
+  # Segmentation
+  masks: "store_true"
+  
+  # not used
+  weight_decay: 0.0001 # optimizer
+  lr_drop: 200
+  clip_max_norm: 0.1
+
+
+
+dataloader:
+  batch_size: 8 # 64
+  num_workers: 4
+  shuffle: True
+  pin_memory: True
+  persistent_workers: False
+
+val_dataloader:
+  batch_size: 8 # 64
+  num_workers: 4
+  # shuffle: False
+  shuffle: True
+  pin_memory: True
+  persistent_workers: False
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda:0"
+  seed: 42
+  debug: False
+  resume: True
+  num_epochs: 2000
+  batch_size: 8
+  eval: false
+  # training loop control
+  # in epochs
+  checkpoint_every: 200
+  # misc
+  tqdm_interval_sec: 1.0
+
+logging:
+  project: act_debug
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}"]
+  id: null
+  group: null
+
+checkpoint:
+  topk:
+    monitor_key: train_loss
+    mode: min
+    k: 20
+    format_str: 'epoch={epoch:04d}-train_loss={train_loss:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}
