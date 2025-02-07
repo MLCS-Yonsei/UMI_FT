@@ -32,7 +32,14 @@ class SequenceSampler:
         repeat_frame_prob: float=0.0,
         max_duration: Optional[float]=None
     ):
-        episode_ends = replay_buffer.episode_ends[:]
+        episode_ends = replay_buffer.episode_ends[:] # it means all length of each episodes
+        # it has like this form
+        # [  1243   2943   4828   6559   8212  10048  10817  11683  12470  13263
+        #    14114  14985  15887  16774  17916  18903  19904  20960  21961  22943
+        #    23982  24948  25821  26676  27595  28541  29492  30423  31393  32352 ...
+        # [1st_ep_end_time 2nd_ep_end_time ...]
+        # 1st_ep_end_time = 2nd_ep_satrt_time
+        max_ep_length = 0
 
         # load gripper_width
         gripper_width = replay_buffer['robot0_gripper_width'][:, 0]
@@ -48,6 +55,11 @@ class SequenceSampler:
                 continue
             start_idx = 0 if i == 0 else episode_ends[i-1]
             end_idx = episode_ends[i]
+
+            # Find max episode length
+            ep_length = end_idx - start_idx
+            max_ep_length = max(ep_length, max_ep_length)
+
             if max_duration is not None:
                 end_idx = min(end_idx, max_duration * 60)
             for current_idx in range(start_idx, end_idx):
@@ -111,12 +123,18 @@ class SequenceSampler:
         self.key_down_sample_steps = key_down_sample_steps
         
         self.ignore_rgb_is_applied = False # speed up the interation when getting normalizaer
+        
+        self.max_ep_length = max_ep_length
 
     def __len__(self):
         return len(self.indices)
     
     def sample_sequence(self, idx):
         current_idx, start_idx, end_idx, before_first_grasp = self.indices[idx]
+
+        # TODO
+        # 1. make action padding with self.max_ep_length
+        # 2. make action sequence which requre config yaml
 
         result = dict()
 
@@ -202,3 +220,20 @@ class SequenceSampler:
     
     def ignore_rgb(self, apply=True):
         self.ignore_rgb_is_applied = apply
+
+
+class ACTSequenceSampler:
+    def __init__(self,
+                 shape_meta: dict,
+                 replay_buffer: ReplayBuffer,
+                 rgb_keys: list,
+                 lowdim_keys: list,
+                 key_horizon: dict, # action horizon
+                 key_latency_steps: dict,
+                 key_down_sample_steps: dict,
+                 episode_mask: Optional[np.ndarray]=None,
+                 action_padding: bool=False,
+                 repeat_frame_prob: float=0.0,
+                 max_duration: Optional[float]=None
+                 ):
+        episodes_ends = replay_buffer.episode_ends[:]
