@@ -222,18 +222,4 @@ class SequenceSampler:
         self.ignore_rgb_is_applied = apply
 
 
-class ACTSequenceSampler:
-    def __init__(self,
-                 shape_meta: dict,
-                 replay_buffer: ReplayBuffer,
-                 rgb_keys: list,
-                 lowdim_keys: list,
-                 key_horizon: dict, # action horizon
-                 key_latency_steps: dict,
-                 key_down_sample_steps: dict,
-                 episode_mask: Optional[np.ndarray]=None,
-                 action_padding: bool=False,
-                 repeat_frame_prob: float=0.0,
-                 max_duration: Optional[float]=None
-                 ):
-        episodes_ends = replay_buffer.episode_ends[:]
+

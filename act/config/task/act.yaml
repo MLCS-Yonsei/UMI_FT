@@ -12,6 +12,7 @@ img_obs_horizon: 2 # VTT expects a single image input
 action_horizon: 16
 ignore_proprioception: False
 
+
 shape_meta: &shape_meta
   # acceptable types: rgb, low_dim
   obs:
@@ -77,6 +78,7 @@ shape_meta: &shape_meta
 
 task_name: &task_name act
 dataset_path: GoPro2/dataset.zarr.zip
+hdf5_path: GoPro/
 pose_repr: &pose_repr
   obs_pose_repr: relative # abs or rel
   action_pose_repr: relative # abs or rel or delta
@@ -85,9 +87,11 @@ env_runner:
   _target_: diffusion_policy.env_runner.real_pusht_image_runner.RealPushTImageRunner
 
 dataset:
-  _target_: diffusion_policy.dataset.umi_dataset_ft.UmiDatasetFT
+  _target_: act.dataset.act_dataset_ft.ACTDataset
   shape_meta: *shape_meta
   dataset_path: ${task.dataset_path}
+  hdf5_path: ${task.hdf5_path}
+  do_convert: True
   cache_dir: null
   pose_repr: *pose_repr
   action_padding: False
@@ -96,3 +100,4 @@ dataset:
   max_duration: null
   seed: 42
   val_ratio: 0.05
+  chunk_size: 50

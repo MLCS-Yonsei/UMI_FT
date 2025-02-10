@@ -20,6 +20,7 @@ from act.common.pose_repr_util import convert_pose_mat_rep
 from act.common.pytorch_util import dict_apply
 from act.common.replay_buffer import ReplayBuffer
 from act.common.sampler import SequenceSampler, get_val_mask
+from act.common.data_converter import ACTDataConverter
 from act.dataset.base_dataset import BaseDataset
 from act.common.normalizer import LinearNormalizer
 from act.common.pose_util import pose_to_mat, mat_to_pose10d
@@ -29,6 +30,8 @@ class ACTDataset(BaseDataset):
     def __init__(self,
         shape_meta: dict,
         dataset_path: str,
+        hdf5_path: str,
+        chunk_size: int,
         cache_dir: Optional[str]=None,
         pose_repr: dict={},
         action_padding: bool=False,
@@ -36,7 +39,8 @@ class ACTDataset(BaseDataset):
         repeat_frame_prob: float=0.0,
         seed: int=42,
         val_ratio: float=0.0,
-        max_duration: Optional[float]=None
+        max_duration: Optional[float]=None,
+        do_convert: bool=False
     ):
         self.pose_repr = pose_repr
         self.obs_pose_repr = self.pose_repr.get('obs_pose_repr', 'rel')
@@ -141,7 +145,10 @@ class ACTDataset(BaseDataset):
                 key_horizon[key] = shape_meta['obs'][query_key]['horizon']
                 key_latency_steps[key] = shape_meta['obs'][query_key]['latency_steps']
                 key_down_sample_steps[key] = shape_meta['obs'][query_key]['down_sample_steps']
-                
+
+        if do_convert:
+            self.covert_zarr_to_hdf5()
+
         sampler = SequenceSampler(
             shape_meta=shape_meta,
             replay_buffer=replay_buffer,
@@ -155,8 +162,11 @@ class ACTDataset(BaseDataset):
             repeat_frame_prob=repeat_frame_prob,
             max_duration=max_duration
         )
+
         self.shape_meta = shape_meta
         self.replay_buffer = replay_buffer
+        self.chunk_size = chunk_size
+        self.hdf5_path = hdf5_path
         self.rgb_keys = rgb_keys
         self.lowdim_keys = lowdim_keys
         self.key_horizon = key_horizon
@@ -171,6 +181,21 @@ class ACTDataset(BaseDataset):
         self.threadpool_limits_is_applied = False
 
     
+    def covert_zarr_to_hdf5(self):
+        converter = ACTDataConverter(
+            shape_meta=self.shape_meta,
+            replay_buffer=self.replay_buffer,
+            hdf5_path=self.hdf5_path,
+            rgb_keys=self.rgb_keys,
+            lowdim_keys=self.sampler_lowdim_keys,
+            key_horizon=self.key_horizon,
+            key_latency_steps=self.key_latency_steps,
+            key_down_sample_steps=self.key_down_sample_steps,
+        )
+
+        # Convert UMI zarr data to hdf5
+        converter.process_episodes()
+
     def get_validation_dataset(self):
         val_set = copy.copy(self)
         val_set.sampler = SequenceSampler(
