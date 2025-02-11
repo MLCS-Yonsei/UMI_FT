@@ -5,6 +5,11 @@ import scipy.interpolate as si
 import scipy.spatial.transform as st
 from act.common.replay_buffer import ReplayBuffer
 
+import os
+import h5py
+import torch
+
+
 def get_val_mask(n_episodes, val_ratio, seed=0):
     val_mask = np.zeros(n_episodes, dtype=bool)
     if val_ratio <= 0:
@@ -18,10 +23,85 @@ def get_val_mask(n_episodes, val_ratio, seed=0):
     return val_mask
 
 
-class SequenceSampler:
+class ACTSampler:
     def __init__(self,
+                 episode_indices,
+                 hdf5_path,
+                 cam_names,
+                 ):
+        self.episode_indices = episode_indices
+        self.hdf5_path = hdf5_path
+        self.cam_names = cam_names
+        self.is_sim = None
+    
+    def __len__(self):
+        return len(self.episode_indices)
+
+    def sample_item(self, index):
+
+        episode_id = self.episode_ids[index]
+        dataset_path = os.path.join(self.hdf5_path, f'ep_{episode_id}.hdf5')
+        with h5py.File(dataset_path, 'r') as root:
+            is_sim = root.attrs['sim']
+            original_action_shape = root['/action'].shape
+            episode_len = original_action_shape[0]
+            start_ts = np.random.choice(episode_len)
+            # get observation at start timestep only
+            pos = root['/observations/eef_pos'][start_ts]
+            rot = root['/observations/eef_rot'][start_ts]
+            width = root['/observations/gripper_width'][start_ts]
+
+            image_dict = dict()
+            for cam_name in self.cam_names:
+                image_dict[cam_name] = root[f'/observations/images/{cam_name}'][start_ts]
+            if is_sim:
+                action = root['/action'][start_ts:]
+                action_len = episode_len - start_ts
+            else:
+                action = root['/action'][max(0, start_ts - 1):]
+                action_len = episode_len - max(0, start_ts - 1)
+            
+        self.is_sim = is_sim
+        padded_action = np.zeros(original_action_shape, dtype=np.float32)
+        padded_action[:action_len] = action
+        is_pad = np.zeros(episode_len)
+        is_pad[action_len:] = 1
+
+        # new axis for different cameras
+        all_cam_images = []
+        for cam_name in self.camera_names:
+            all_cam_images.append(image_dict[cam_name])
+        all_cam_images = np.stack(all_cam_images, axis=0)
+
+        # image_data = torch.from_numpy(all_cam_images)
+        # pos_data = torch.from_numpy(pos).float()
+        # action_data = torch.from_numpy(padded_action).float()
+        # is_pad = torch.from_numpy(is_pad).bool()
+
+        obs = {
+            'eef_pos': torch.from_numpy(pos).float(),
+            'eef_rot': torch.from_numpy(rot).float(),
+            'gripper_width' : torch.from_numpy(width).float(),
+            'images': torch.from_numpy(all_cam_images),
+        }
+
+        action = torch.from_numpy(padded_action).float()
+
+        is_pad = torch.from_numpy(is_pad).bool()
+
+        # return image_data, pos_data, action_data, is_pad
+        return {'obs': obs, 'action': action, 'is_pad': is_pad}
+
+
+        
+
+
+class ACTSequenceSampler:
+    def __init__(self,
+        episode_indices,
         shape_meta: dict,
         replay_buffer: ReplayBuffer,
+        hdf5_path: str,
         rgb_keys: list,
         lowdim_keys: list,
         key_horizon: dict,
@@ -30,16 +110,9 @@ class SequenceSampler:
         episode_mask: Optional[np.ndarray]=None,
         action_padding: bool=False,
         repeat_frame_prob: float=0.0,
-        max_duration: Optional[float]=None
+        max_duration: Optional[float]=None,
     ):
         episode_ends = replay_buffer.episode_ends[:] # it means all length of each episodes
-        # it has like this form
-        # [  1243   2943   4828   6559   8212  10048  10817  11683  12470  13263
-        #    14114  14985  15887  16774  17916  18903  19904  20960  21961  22943
-        #    23982  24948  25821  26676  27595  28541  29492  30423  31393  32352 ...
-        # [1st_ep_end_time 2nd_ep_end_time ...]
-        # 1st_ep_end_time = 2nd_ep_satrt_time
-        max_ep_length = 0
 
         # load gripper_width
         gripper_width = replay_buffer['robot0_gripper_width'][:, 0]
@@ -55,10 +128,6 @@ class SequenceSampler:
                 continue
             start_idx = 0 if i == 0 else episode_ends[i-1]
             end_idx = episode_ends[i]
-
-            # Find max episode length
-            ep_length = end_idx - start_idx
-            max_ep_length = max(ep_length, max_ep_length)
 
             if max_duration is not None:
                 end_idx = min(end_idx, max_duration * 60)
@@ -124,17 +193,11 @@ class SequenceSampler:
         
         self.ignore_rgb_is_applied = False # speed up the interation when getting normalizaer
         
-        self.max_ep_length = max_ep_length
-
     def __len__(self):
         return len(self.indices)
     
     def sample_sequence(self, idx):
         current_idx, start_idx, end_idx, before_first_grasp = self.indices[idx]
-
-        # TODO
-        # 1. make action padding with self.max_ep_length
-        # 2. make action sequence which requre config yaml
 
         result = dict()
 

@@ -99,5 +99,5 @@ dataset:
   repeat_frame_prob: 0.0
   max_duration: null
   seed: 42
-  val_ratio: 0.05
+  val_ratio: 0.2
   chunk_size: 50

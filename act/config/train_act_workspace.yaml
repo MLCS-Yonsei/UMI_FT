@@ -17,6 +17,8 @@ task_name:
 temporal_agg: false
 state_dim: 14
 chunk_size: 100
+num_episodes: 205
+cam_names : ["top"]
 
 
 policy:
@@ -33,7 +35,7 @@ policy:
   backbone: "resnet18"
   dilation: "store_true"
   position_embedding: "sine"
-  camera_names: ["top"] # assume uni-manual
+  camera_names: $(cam_names) # assume uni-manual
 
   # Transformer
   encoder_layers: 4

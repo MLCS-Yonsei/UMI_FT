@@ -20,18 +20,19 @@ import pickle
 import tqdm
 import numpy as np
 import shutil
-from diffusion_policy.workspace.base_workspace import BaseWorkspace
+from act.workspace.base_workspace import BaseWorkspace
 from act.policy.act_policy import ACTPolicy
-from diffusion_policy.dataset.base_dataset import BaseImageDataset, BaseDataset
-from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
-from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
-from diffusion_policy.common.json_logger import JsonLogger
-from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
-from diffusion_policy.model.common.lr_scheduler import get_scheduler
+from act.dataset.base_dataset import BaseImageDataset, BaseDataset
+from act.env_runner.base_image_runner import BaseImageRunner
+from act.common.checkpoint_util import TopKCheckpointManager
+from act.common.json_logger import JsonLogger
+from act.common.pytorch_util import dict_apply, optimizer_to
+from act.model.common.lr_scheduler import get_scheduler
 from accelerate import Accelerator
 
 from copy import deepcopy
 from act.common.pytorch_util import compute_dict_mean, detach_dict
+from act.dataset.act_dataset import ACTDataset
 
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
@@ -74,9 +75,30 @@ class TrainACTWorkspace(BaseWorkspace):
         self.global_step = 0
         self.epoch = 0
 
+        self.num_episodes = self.cfg.num_episodes
+
         # do not save optimizer if resume=False
         if not cfg.training.resume:
             self.exclude_keys = ['optimizer']
+        
+        self.load_and_convert = False
+    
+    def load_data(self):
+        train_ratio = 1 - self.cfg.task.dataset.val_ratio
+        shuffled_indices = np.random.permutation(self.num_episodes)
+        train_indices = shuffled_indices[:int(train_ratio * self.num_episodes)]
+        val_indices = shuffled_indices[int(train_ratio * self.num_episodes):]
+
+        train_dataset = ACTDataset(train_indices, **self.cfg.task.dataset)
+        val_dataset = ACTDataset(val_indices, **self.cfg.task.dataset)
+        train_dataloader = DataLoader(train_dataset, **self.cfg.dataloader)
+        val_dataloader = DataLoader(val_dataset, **self.cfg.val_dataloader)
+        print('train dataset:', len(train_dataset), 'train dataloader:', len(train_dataloader))
+        print('val dataset:', len(val_dataset), 'val dataloader:', len(val_dataloader))
+        self.load_and_convert = True
+        return train_dataloader, val_dataloader
+
+
         
     def run(self):
         cfg = copy.deepcopy(self.cfg)
@@ -104,6 +126,15 @@ class TrainACTWorkspace(BaseWorkspace):
         assert isinstance(dataset, BaseImageDataset) or isinstance(dataset, BaseDataset)
         train_dataloader = DataLoader(dataset, **cfg.dataloader)
 
+        # configure validation dataset
+        val_dataset = dataset.get_validation_dataset()
+        val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
+        print('train dataset:', len(dataset), 'train dataloader:', len(train_dataloader))
+        print('val dataset:', len(val_dataset), 'val dataloader:', len(val_dataloader))
+        
+        # configure train and validation dataloader
+        if not self.load_and_convert:
+            train_dataloader, val_dataloader = self.load_data()            
 
         # compute normalizer on the main process and save to disk
         normalizer_path = os.path.join(self.output_dir, 'normalizer.pkl')
@@ -116,11 +147,6 @@ class TrainACTWorkspace(BaseWorkspace):
         normalizer = pickle.load(open(normalizer_path, 'rb'))
         self.model.set_normalizer(normalizer)
 
-        # configure validation dataset
-        val_dataset = dataset.get_validation_dataset()
-        val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
-        print('train dataset:', len(dataset), 'train dataloader:', len(train_dataloader))
-        print('val dataset:', len(val_dataset), 'val dataloader:', len(val_dataloader))
 
         # configure env 
         env_runner: BaseImageRunner

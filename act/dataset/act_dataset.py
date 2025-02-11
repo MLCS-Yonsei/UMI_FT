@@ -19,7 +19,7 @@ from act.common.normalize_util import (
 from act.common.pose_repr_util import convert_pose_mat_rep
 from act.common.pytorch_util import dict_apply
 from act.common.replay_buffer import ReplayBuffer
-from act.common.sampler import SequenceSampler, get_val_mask
+from act.common.sampler import ACTSequenceSampler, get_val_mask
 from act.common.data_converter import ACTDataConverter
 from act.dataset.base_dataset import BaseDataset
 from act.common.normalizer import LinearNormalizer
@@ -28,6 +28,7 @@ from act.common.pose_util import pose_to_mat, mat_to_pose10d
 
 class ACTDataset(BaseDataset):
     def __init__(self,
+        episode_indices,
         shape_meta: dict,
         dataset_path: str,
         hdf5_path: str,
@@ -42,6 +43,7 @@ class ACTDataset(BaseDataset):
         max_duration: Optional[float]=None,
         do_convert: bool=False
     ):
+        self.episode_indices = episode_indices
         self.pose_repr = pose_repr
         self.obs_pose_repr = self.pose_repr.get('obs_pose_repr', 'rel')
         self.action_pose_repr = self.pose_repr.get('action_pose_repr', 'rel')
@@ -147,9 +149,10 @@ class ACTDataset(BaseDataset):
                 key_down_sample_steps[key] = shape_meta['obs'][query_key]['down_sample_steps']
 
         if do_convert:
-            self.covert_zarr_to_hdf5()
+            self.covert_zarr_to_hdf5(hdf5_path)
 
-        sampler = SequenceSampler(
+        sampler = ACTSequenceSampler(
+            episode_indices = self.episode_indices,
             shape_meta=shape_meta,
             replay_buffer=replay_buffer,
             rgb_keys=rgb_keys,
@@ -160,7 +163,8 @@ class ACTDataset(BaseDataset):
             episode_mask=train_mask,
             action_padding=action_padding,
             repeat_frame_prob=repeat_frame_prob,
-            max_duration=max_duration
+            max_duration=max_duration,
+            hdf5_path = hdf5_path
         )
 
         self.shape_meta = shape_meta
@@ -181,11 +185,11 @@ class ACTDataset(BaseDataset):
         self.threadpool_limits_is_applied = False
 
     
-    def covert_zarr_to_hdf5(self):
+    def covert_zarr_to_hdf5(self, hdf5_path):
         converter = ACTDataConverter(
             shape_meta=self.shape_meta,
             replay_buffer=self.replay_buffer,
-            hdf5_path=self.hdf5_path,
+            hdf5_path=hdf5_path,
             rgb_keys=self.rgb_keys,
             lowdim_keys=self.sampler_lowdim_keys,
             key_horizon=self.key_horizon,
@@ -198,7 +202,8 @@ class ACTDataset(BaseDataset):
 
     def get_validation_dataset(self):
         val_set = copy.copy(self)
-        val_set.sampler = SequenceSampler(
+        val_set.sampler = ACTSequenceSampler(
+            episode_indices = self.episode_indices,
             shape_meta=self.shape_meta,
             replay_buffer=self.replay_buffer,
             rgb_keys=self.rgb_keys,
@@ -209,7 +214,8 @@ class ACTDataset(BaseDataset):
             episode_mask=self.val_mask,
             action_padding=self.action_padding,
             repeat_frame_prob=self.repeat_frame_prob,
-            max_duration=self.max_duration
+            max_duration=self.max_duration,
+            hdf5_path = self.hdf5_path
         )
         val_set.val_mask = ~self.val_mask
         return val_set
