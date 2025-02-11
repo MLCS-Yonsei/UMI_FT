@@ -4,8 +4,8 @@ import torchvision.transforms as transforms
 
 import torch
 import numpy as np
-from detr.main import build_ACT_model_and_optimizer
-from common.normalizer import LinearNormalizer
+from act.detr.main import build_ACT_model_and_optimizer
+from act.common.normalizer import LinearNormalizer
 
 
 
@@ -17,7 +17,7 @@ class ACTPolicy(nn.Module):
                  lr,
                  kl_weight,
                  lr_backbone,
-                 num_heads,
+                 nheads,
                  shape_meta : dict,
                  state_dim,
 
@@ -51,7 +51,7 @@ class ACTPolicy(nn.Module):
             'lr': lr,
             'kl_weight': kl_weight,
             'lr_backbone': lr_backbone,
-            'nheads': num_heads,
+            'nheads': nheads,
             'state_dim' : state_dim,
 
             'backbone': backbone,
@@ -82,33 +82,7 @@ class ACTPolicy(nn.Module):
         self.kl_weight = kl_weight
         print(f'KL Weight {self.kl_weight}')
 
-        self.obs_encoder = ... # self.model.cls_embed, self.model.encoder_action_proj, self.model.joint_proj
         self.normalizer = LinearNormalizer()
-
-        # define observation keys
-        self.rgb_keys = []
-        self.force_keys = []
-        self.torque_keys = []
-        self.lowdim_keys = []
-
-        obs_shape_meta = shape_meta['obs']
-        key_shape_map = dict()
-
-        for key, attr in obs_shape_meta.items():
-            shape = tuple(attr['shape'])
-            type = attr.get('type', 'low_dim')
-            key_shape_map[key] = shape
-
-            if type == 'rgb':
-                self.rgb_keys.append(key)
-            elif type == 'low_dim':
-                if key.endswith('force'):
-                    self.force_keys.append(key)
-                elif key.endswith('torque'):
-                    self.torque_keys.append(key)
-                else:
-                    self.lowdim_keys.append(key)
-
 
     
     def __call__(self, data):
@@ -155,26 +129,17 @@ class ACTPolicy(nn.Module):
         images = None
 
         obs_dict = data['obs']
-        action = data['action']
-
-        # process inputs including bi-manual case
-        for key in self.rgb_keys:
-            images = obs_dict[key]
-        
-        for key in self.lowdim_keys:
-            low_dim_data = obs_dict[key]
-        
-        for key in self.force_keys:
-            force_data = obs_dict[key]
-        
-        for key in self.torque_keys:
-            torque_data = obs_dict[key]
+        action = data['action'] 
+        is_pad = data['is_pad']
         
         # normalize input
         nobs = self.normalizer.normalize(obs_dict)
         nactions = self.normalizer['action'].normalize(action)
         batch_size = nactions.shape[0]
-        horizon = nactions.shape[1]
+
+        # extract low dim obs
+        low_dim_keys = ['eef_pos', 'eef_rot', 'gripper_width']
+        low_dim_data = torch.cat([obs_dict[key] for key in low_dim_keys if key in obs_dict], dim=-1)
 
         if nactions is not None: # training time
             actions = nactions[:, :self.model.num_queries]

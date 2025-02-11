@@ -27,7 +27,9 @@ class ACTDataConverter:
                  key_horizon: dict, # action horizon
                  key_latency_steps: dict,
                  key_down_sample_steps: dict,
+                 pose_repr: dict
                  ):
+        
         
         # load all length of episodes
         episodes_ends = replay_buffer.episode_ends[:]
@@ -59,16 +61,93 @@ class ACTDataConverter:
             for current_idx in range(start_idx, end_idx):
                 indices.append((current_idx, start_idx, end_idx))
         
+        print("Max ep length: ", max_ep_length)
+
+        self.indices = indices
+        self.ep_indices = ep_indices
+        self.rgb_keys = rgb_keys
+        self.lowdim_keys = lowdim_keys
+        self.shape_meta = shape_meta
+
+        self.key_latency_steps = key_latency_steps
+        self.key_down_sample_steps = key_down_sample_steps
+        self.key_horizon = key_horizon
+
+        self.pose_repr = pose_repr
+        self.obs_pose_repr = self.pose_repr['obs_pose_repr']
+        self.action_pose_repr = self.pose_repr['action_pose_repr']
+
+        self.sampler_lowdim_keys = list()
+        for key in self.lowdim_keys:
+            if not 'wrt' in key:
+                self.sampler_lowdim_keys.append(key)
+        
+        print("Extracting replay buffer")
+        self.extract_replay_buffer(replay_buffer)
+
+        
+        shape_dict = dict()
+        for key, attr in shape_meta['obs'].items():
+            shape = attr.get('shape')
+            if key.endswith('rgb'):
+                shape_dict[key] = shape
+            elif key.endswith('pos'):
+                shape_dict[key] = shape
+            elif key.endswith('angle'):
+                shape_dict[key] = shape
+            elif key.endswith('width'):
+                shape_dict[key] = shape
+            elif key.endswith('start'):
+                shape_dict[key] = shape
+            elif key.endswith('force'):
+                shape_dict[key] = shape
+            elif key.endswith('torque'):
+                shape_dict[key] = shape
+            else:
+                raise NotImplementedError
+        
+        shape_dict['action'] = shape_meta['action']['shape']
+        
+        self.shape_dict = shape_dict
+
+        self.max_ep_length = max_ep_length
+        self.camera_names = camera_names
+        self.hdf5_path = hdf5_path
+
+    def __len__(self):
+        # length of all data
+        return len(self.indices)
+
+    def extract_replay_buffer(self, replay_buffer):
+        '''
+            camera0_rgb
+            robot0_demo_end_pose
+            robot0_demo_start_pose
+            robot0_eef_pos
+            robot0_eef_rot_axis_angle
+            robot0_force
+            robot0_gripper_width
+            robot0_torque
+        '''
+        
+        for key in replay_buffer.keys():
+            if key.endswith('_demo_start_pose') or key.endswith('_demo_end_pose'):
+                self.sampler_lowdim_keys.append(key)
+                query_key = key.split('_')[0] + '_eef_pos'
+                self.key_horizon[key] = self.shape_meta['obs'][query_key]['horizon']
+                self.key_latency_steps[key] = self.shape_meta['obs'][query_key]['latency_steps']
+                self.key_down_sample_steps[key] = self.shape_meta['obs'][query_key]['down_sample_steps']
+                
         self.replay_buffer = dict()
         self.num_robot = 0
 
-        for key in lowdim_keys:
+        for key in self.sampler_lowdim_keys:
             if key.endswith('eef_pos'):
                 self.num_robot += 1
             
-            self.replay_buffer[key] = replay_buffer[key]
+            self.replay_buffer[key] = replay_buffer[key][:]
         
-        for key in rgb_keys:
+        for key in self.rgb_keys:
             self.replay_buffer[key] = replay_buffer[key]
         
         if 'action' in replay_buffer:
@@ -81,49 +160,7 @@ class ACTDataConverter:
                     if key in self.replay_buffer:
                         actions.append(self.replay_buffer[key])
             self.replay_buffer['action'] = np.concatenate(actions, axis=-1)
-        
-        shape_dict = dict()
-        for key, attr in shape_meta['obs']:
-            shape = attr.get('shape')
-            if key.endswith('rgb'):
-                shape_dict[key] = shape
-            elif key.endswith('pos'):
-                shape_dict[key] = shape
-            elif key.endswith('angle'):
-                shape_dict[key] = shape
-            elif key.endswith('width'):
-                shape_dict[key] = shape
-            # elif key.endswith('force'):
-            #     shape_dict[key] = shape
-            # elif key.endswith('torque'):
-            #     shape_dict[key] = shape
-            else:
-                raise NotImplementedError
-        
-        for key, attr in shape_meta['action']:
-            shape = attr.get('shape')
-            shape_dict['action'] = shape
-            
-        
-        self.indices = indices
-        self.ep_indices = ep_indices
-        self.rgb_keys = rgb_keys
-        self.lowdim_keys = lowdim_keys
 
-        self.shape_dict = shape_dict
-
-        self.key_latency_steps = key_latency_steps
-        self.key_down_sample_steps = key_down_sample_steps
-        self.key_horizon = key_horizon
-
-        self.max_ep_length = max_ep_length
-        self.camera_names = camera_names
-        self.hdf5_path = hdf5_path
-
-    def __len__(self):
-        # length of all data
-        return len(self.indices)
-    
     def preprocess_episodes(self):
         '''
             replay_buffer -> input array -> processing -> dict()
@@ -154,12 +191,12 @@ class ACTDataConverter:
         
         '''
         result = dict()
-        obs_keys = self.rgb_keys + self.lowdim_keys
-        if self.ignore_rgb_is_applied:
-            obs_keys = self.lowdim_keys
+        obs_keys = self.rgb_keys + self.sampler_lowdim_keys
+        # if self.ignore_rgb_is_applied:
+        #     obs_keys = self.sampler_lowdim_keys
         
         for (ep_idx, start_idx, end_idx) in self.ep_indices:
-            print(f"Processing episode {ep_idx}/{len(self.ep_indices)}.")
+            print(f"Pre-Processing episode {ep_idx}/{len(self.ep_indices)}.")
 
             # observation
             for key in obs_keys:
@@ -168,11 +205,12 @@ class ACTDataConverter:
                 this_downsample_steps = self.key_down_sample_steps[key]
 
                 # ep_idx th data array
-                obs_arr = self.replay_buffer[key][start_idx : end_idx]
+                obs_arr = self.replay_buffer[key]
 
                 # calculate idx for image
                 if key in self.rgb_keys:
                     image_idx_set = self.calculate_idx(key, start_idx, end_idx, this_horizon, this_downsample_steps, this_latency_steps)
+                    image_idx_set = list(image_idx_set)
                     image_start_idx, image_end_idx = image_idx_set[0], image_idx_set[-1]
                     
                     # save image data
@@ -192,13 +230,15 @@ class ACTDataConverter:
             assert action_latency_steps == 0
             action_downsample_steps = self.key_down_sample_steps['action']
             action_idx_set = self.calculate_idx(key, start_idx, end_idx, action_horizon, action_downsample_steps, action_latency_steps, type='action')
+            action_idx_set = list(action_idx_set)
             action_start_idx, action_end_idx = action_idx_set[0], action_idx_set[-1]
             result['action'] = action_arr[action_start_idx:action_end_idx]
         
         return result
 
-    def postprocess_episodes(self):
-        data = self.process_episodes()
+    def postprocess_episodes(self, data):
+        print("Post-Processing episode.")
+        # data = self.preprocess_episodes()
 
         obs_dict = dict()
 
@@ -228,7 +268,7 @@ class ACTDataConverter:
             for other_robot_id in range(self.num_robot):
                 if robot_id == other_robot_id:
                     continue
-                if not f'robot{robot_id}_eef_pos_wrt{other_robot_id}' in self.lowdim_keys:
+                if not f'robot{robot_id}_eef_pos_wrt{other_robot_id}' in self.sampler_lowdim_keys:
                     continue
                 other_pose_mat = pose_to_mat(np.concatenate([
                     obs_dict[f'robot{other_robot_id}_eef_pos'],
@@ -313,12 +353,127 @@ class ACTDataConverter:
             
         data['action'] = np.concatenate(actions, axis=-1)
         
-        torch_data = {
-            'obs': dict_apply(obs_dict, torch.from_numpy),
-            'action': torch.from_numpy(data['action'].astype(np.float32))
-        }
-        return torch_data
+        # torch_data = {
+        #     'obs': dict_apply(obs_dict, torch.from_numpy),
+        #     'action': torch.from_numpy(data['action'].astype(np.float32))
+        # }
+        # return torch_data
+        return {'obs' : obs_dict, 'action': data['action']}
 
+    def convert_episodes(self):
+            
+        # define data dict
+        data_dict = {
+            '/observations/eef_pos': [],
+            '/observations/eef_rot': [],
+            '/observations/eef_rot_start': [],
+            '/observations/gripper_width': [],
+            '/observations/force': [],
+            '/observations/torque': [],
+            '/action': []
+        }
+
+        for cam_name in self.camera_names:
+            data_dict[f'/observations/images/{cam_name}'] = []
+        
+
+        # processing data
+        print("Preprocessing...")
+        data = self.preprocess_episodes()
+        print("Postprocessing...")
+        packed_data = self.postprocess_episodes(data)
+
+        # define shape of data
+        for key in self.shape_dict:
+            shape = self.shape_dict[key]
+            if key.endswith('rgb'):
+                image_shape = shape
+            elif key.endswith('pos'):
+                pos_shape = shape
+            elif key.endswith('angle'):
+                rot_shape = shape
+            elif key.endswith('width'):
+                width_shape = shape
+            elif key.endswith('start'):
+                start_shape = shape
+            elif key.endswith('force'):
+                force_shape = shape
+            elif key.endswith('torque'):
+                torque_shape = shape
+            elif key.endswith('action'):
+                action_shape = shape
+            else:
+                raise NotImplementedError
+
+        for (ep_idx, start_idx, end_idx) in self.ep_indices:
+            print(f"Converting episode {ep_idx}/{len(self.ep_indices)}.")
+
+            # define hdf5 save path
+            dataset_path = os.path.join(self.hdf5_path, f'ep_{ep_idx}.hdf5')
+
+            # skip saving if file alreay exists
+            if os.path.isfile(dataset_path):
+                print(f"Episode {ep_idx} already exists. Skipping...")
+                continue
+            
+            # unpack data and save to data dict
+            for k in packed_data['obs'].keys():
+                if k.endswith('pos'):
+                    data_dict['/observations/eef_pos'].append(packed_data['obs'][k])
+                elif k.endswith('angle'):
+                    data_dict['/observations/eef_rot'].append(packed_data['obs'][k])
+                elif k.endswith('width'):
+                    data_dict['/observations/gripper_width'].append(packed_data['obs'][k])
+                elif k.endswith('force'):
+                    data_dict['/observations/force'].append(packed_data['obs'][k])
+                elif k.endswith('torque'):
+                    data_dict['/observations/torque'].append(packed_data['obs'][k])
+                elif k.endswith('start'):
+                    data_dict['/observations/eef_rot_start'].append(packed_data['obs'][k])
+                elif k.endswith('rgb'):
+                    for cam_name in self.camera_names:
+                        data_dict[f'/observations/images/{cam_name}'].append(packed_data['obs'][k])
+                else:
+                    raise NotImplementedError
+            
+            data_dict['/action'].append(packed_data['action'])
+
+            # pad data
+            for key, array in data_dict.items():
+                array = array[0]
+                current_length = array.shape[0]
+
+                if current_length < self.max_ep_length:
+                    pad_size = self.max_ep_length - current_length
+                    padding_shape = list(array.shape[1:])
+                    padding = np.zeros((pad_size, *padding_shape), dtype=array.dtype)
+                    array = np.concatenate([array, padding], axis=0)
+                
+                data_dict[key] = [array]
+            
+            # convert each ep to hdf5 and save
+            with h5py.File(dataset_path, 'w', rdcc_nbytes=1024**2*2) as root:
+                root.attrs['sim'] = False
+
+                # make group
+                obs_group = root.create_group('observations')
+                image_group = obs_group.create_group('images')
+
+                # create dataset case
+                for cam_name in self.camera_names:
+                    _ = image_group.create_dataset(cam_name, (self.max_ep_length, *image_shape), dtype='uint8',
+                                             chunks=(1, *image_shape), )
+
+                _ = obs_group.create_dataset('eef_pos', (self.max_ep_length, *pos_shape))
+                _ = obs_group.create_dataset('eef_rot', (self.max_ep_length, *rot_shape))
+                _ = obs_group.create_dataset('force', (self.max_ep_length, *force_shape))
+                _ = obs_group.create_dataset('torque', (self.max_ep_length, *torque_shape))
+                _ = obs_group.create_dataset('eef_rot_start', (self.max_ep_length, *start_shape))
+                _ = obs_group.create_dataset('gripper_width', (self.max_ep_length, *width_shape))
+                _ = root.create_dataset('action', (self.max_ep_length, *action_shape))
+
+                for name, array in data_dict.items():
+                    root[name][...] = array[0]
 
     def calculate_idx(self, key, start_idx, end_idx, horizon, downsample_steps, latency_steps, obs_arr = None, type = 'obs',):
         index_set = set()
@@ -329,7 +484,6 @@ class ACTDataConverter:
                 
                 for idx in downsampled_indices:
                     index_set.add(int(idx))
-            
             return index_set
         else:
             if key in self.rgb_keys:
@@ -344,7 +498,7 @@ class ACTDataConverter:
 
                 return index_set
 
-            else:
+            else: # low dim 
                 output_dict = dict()
                 for current_idx in range(start_idx, end_idx):
                     # latency idx from current idx
@@ -378,6 +532,7 @@ class ACTDataConverter:
                         interpolated_values = rot_postprocess(slerp(idx_with_latency))
                     else:
                         # Linear interpolation
+                        assert len(np.arange(interpolation_start, interpolation_end)) == len(obs_arr[interpolation_start:interpolation_end])
                         interp = si.interp1d(
                             x=np.arange(interpolation_start, interpolation_end),
                             y=obs_arr[interpolation_start:interpolation_end],
@@ -398,139 +553,5 @@ class ACTDataConverter:
                 interpolated_output = np.array([output_dict[idx] for idx in sorted_indices])
 
                 return interpolated_output
-
-    def convert_episodes(self):
-        '''
-            Convert zarr data as HDF5
-
-            For each timestep:
-            observations
-            - images
-                - left : (3, 224, 224)
-                (-right)
-            - eef pos : 3
-            - eef rot : 6
-            - gripper width : 1
-            - force : 3
-            - torque: 3
-
-            action
-            - eef pos + eef rot axis angle + gripper width : 10
-
-            Processing
-
-            observations
-            - images
-                - left : (max_ep_length, 3, 224, 224)
-                (-right)
-            - eef pos : (max_ep_length, 3)
-            - eef rot : (max_ep_length, 6)
-            - gripper width : (max_ep_length, 1)
-            - force : (max_ep_length, 3)
-            - torque: (max_ep_length, 3)
-
-            action
-            - eef pos + eef rot axis angle + gripper width : (max_ep_length, 10)
         
-        '''
-
-        # Assume uni-manual
-        data_dict = {
-            '/observations/eef_pos': [],
-            '/observations/eef_rot': [],
-            '/observations/gripper_width': [],
-            # 'observations/force': [],
-            # 'observations/torque': [],
-            '/action': []
-        }
-
-        for cam_name in self.camera_names:
-            data_dict[f'/observations/images/{cam_name}'] = []
-        
-
-        # observation keys
-        obs_keys = self.rgb_keys + self.lowdim_keys
-        
-
-        for ep in self.ep_indices:
-            # current data
-            ep_idx, start_idx, end_idx = ep
-            print(f"Converting episode {ep_idx}/{len(self.ep_indices)}.")
-
-            # observation
-            for key in obs_keys:
-                this_latency_steps = self.key_latency_steps[key]
-                this_downsample_steps = self.key_down_sample_steps[key]
-                this_horizon = self.key_horizon[key]
-
-                # ep_idx th data array
-                obs_arr = self.replay_buffer[key][start_idx : end_idx]
-
-                # save to data dict
-                if key in self.rgb_keys:
-                    for cam_name in self.camera_names:
-                        data_dict[f'observations/images/{cam_name}'].append(obs_arr)
-                elif key in self.lowdim_keys:
-                    # TODO : process low dim data with latency
-
-                    if key.endswith('pos'):
-                        data_dict['/observations/eef_pos'].append(obs_arr)
-                    elif key.endwith('axis_angle'):
-                        data_dict['/observations/eef_rot'].append(obs_arr)
-                    elif key.endswith('width'):
-                        data_dict['/observations/gripper_width'].append(obs_arr)
-                    # elif key.endswith('force'):
-                    #     data_dict['/observations/force'].append(obs_arr)
-                    # elif key.endswith('torque'):
-                    #     data_dict['/observations/torque'].append(obs_arr)
-                    else:
-                        raise NotImplementedError
-                    
-            # action
-            action_arr = self.replay_buffer['action']
-            data_dict['/action'].append(action_arr)
-
-            # shape of data
-            for key in self.shape_dict:
-                shape = self.shape_dict[key]
-                if key.endswith('rgb'):
-                    image_shape = shape
-                elif key.endswith('pos'):
-                    pos_shape = shape
-                elif key.endswith('angle'):
-                    rot_shape = shape
-                elif key.endswith('width'):
-                    width_shape = shape
-                # elif key.endswith('force'):
-                #     force_shape = shape
-                # elif key.endswith('torque'):
-                #     torque_shape = shape
-                elif key.endswith('action'):
-                    action_shape = shape
-                else:
-                    raise NotImplementedError
-        
-            # Convert each ep to HDF5
-            if os.path.isfile(self.hdf5_path_path + 'ep_' + str(ep_idx) +'.hdf5'):
-                print(f'Dataset already exist.')
-
-            with h5py.File(self.hdf5_path_path + 'ep_' + str(ep_idx) +'.hdf5', 'w' , rdcc_nbytes=1024**2*2) as root:
-                root.attrs['sim'] = False
-                obs = root.create_group('observations')
-                image = obs.create_group('images')
-                for cam_name in self.camera_names:
-                    _ = image.create_dataset(cam_name, (self.max_ep_length, image_shape[0], image_shape[1], image_shape[-1]), dtype='uint8',
-                                             chunks=(1, image_shape[0], image_shape[1], image_shape[-1]), )
-
-                _ = obs.create_dataset('eef_pos', (self.max_ep_length, pos_shape))
-                _ = obs.create_dataset('eef_rot', (self.max_ep_length, rot_shape))
-                _ = obs.create_dataset('gripper_width', (self.max_ep_length, width_shape))
-                _ = root.create_dataset('action', (self.max_ep_length, action_shape))
-
-                for name, array in data_dict.items():
-                    root[name][...] = array
-
-        
-
-
 

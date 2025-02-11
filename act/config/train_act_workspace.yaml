@@ -13,12 +13,11 @@ exp_name: "default"
 eval: false
 onscreen_render: false
 policy_class: "ACT"             
-task_name: 
 temporal_agg: false
-state_dim: 14
+state_dim: 10
 chunk_size: 100
 num_episodes: 205
-cam_names : ["top"]
+camera_names : ["top"]
 
 
 policy:
@@ -27,15 +26,15 @@ policy:
   kl_weight: 10
   lr_backbone: 0.00001
 
-  num_heads: 8
+  nheads: 8
   shape_meta: ${shape_meta}
-  state_dim: $(state_dim)
+  state_dim: ${state_dim}
 
   # Backbone
   backbone: "resnet18"
-  dilation: "store_true"
+  dilation: False
   position_embedding: "sine"
-  camera_names: $(cam_names) # assume uni-manual
+  camera_names: ${camera_names} # assume uni-manual
 
   # Transformer
   encoder_layers: 4
@@ -43,11 +42,11 @@ policy:
   dim_feedforward: 3200
   hidden_dim: 512
   drop_out: 0.1
-  num_queries: $(chunk_size) # chunk size
-  pre_norm: "store_true"
+  num_queries: ${chunk_size} # chunk size
+  pre_norm: True
 
   # Segmentation
-  masks: "store_true"
+  masks: False
   
   # not used
   weight_decay: 0.0001 # optimizer

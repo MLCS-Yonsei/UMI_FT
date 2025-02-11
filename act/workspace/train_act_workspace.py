@@ -22,17 +22,17 @@ import numpy as np
 import shutil
 from act.workspace.base_workspace import BaseWorkspace
 from act.policy.act_policy import ACTPolicy
-from act.dataset.base_dataset import BaseImageDataset, BaseDataset
+from act.dataset.base_dataset import BaseDataset
 from act.env_runner.base_image_runner import BaseImageRunner
 from act.common.checkpoint_util import TopKCheckpointManager
 from act.common.json_logger import JsonLogger
-from act.common.pytorch_util import dict_apply, optimizer_to
-from act.model.common.lr_scheduler import get_scheduler
+from act.common.pytorch_util import dict_apply
 from accelerate import Accelerator
 
 from copy import deepcopy
 from act.common.pytorch_util import compute_dict_mean, detach_dict
 from act.dataset.act_dataset import ACTDataset
+from act.common.data_converter import ACTDataConverter
 
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
@@ -81,22 +81,32 @@ class TrainACTWorkspace(BaseWorkspace):
         if not cfg.training.resume:
             self.exclude_keys = ['optimizer']
         
-        self.load_and_convert = False
-    
+        self.convert_data = False
+        
+            
+
     def load_data(self):
         train_ratio = 1 - self.cfg.task.dataset.val_ratio
         shuffled_indices = np.random.permutation(self.num_episodes)
         train_indices = shuffled_indices[:int(train_ratio * self.num_episodes)]
         val_indices = shuffled_indices[int(train_ratio * self.num_episodes):]
+        
+        print("Loading Dataset")
 
-        train_dataset = ACTDataset(train_indices, **self.cfg.task.dataset)
-        val_dataset = ACTDataset(val_indices, **self.cfg.task.dataset)
+        train_dataset : ACTDataset
+        train_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=train_indices, camera_names=self.cfg.camera_names)
+
+        val_dataset : ACTDataset
+        val_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=val_indices, camera_names=self.cfg.camera_names)
+
+
+        # train_dataset = ACTDataset(train_indices, **self.cfg.task.dataset)
+        # val_dataset = ACTDataset(val_indices, **self.cfg.task.dataset)
         train_dataloader = DataLoader(train_dataset, **self.cfg.dataloader)
         val_dataloader = DataLoader(val_dataset, **self.cfg.val_dataloader)
         print('train dataset:', len(train_dataset), 'train dataloader:', len(train_dataloader))
         print('val dataset:', len(val_dataset), 'val dataloader:', len(val_dataloader))
-        self.load_and_convert = True
-        return train_dataloader, val_dataloader
+        return train_dataset, val_dataset, train_dataloader, val_dataloader
 
 
         
@@ -119,22 +129,13 @@ class TrainACTWorkspace(BaseWorkspace):
             if lastest_ckpt_path.is_file():
                 accelerator.print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
-        
-        # configure dataset
-        dataset: BaseImageDataset
-        dataset = hydra.utils.instantiate(cfg.task.dataset)
-        assert isinstance(dataset, BaseImageDataset) or isinstance(dataset, BaseDataset)
-        train_dataloader = DataLoader(dataset, **cfg.dataloader)
 
-        # configure validation dataset
-        val_dataset = dataset.get_validation_dataset()
-        val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
+
+        # configure train and validation dataloader
+        dataset, val_dataset, train_dataloader, val_dataloader = self.load_data()
         print('train dataset:', len(dataset), 'train dataloader:', len(train_dataloader))
         print('val dataset:', len(val_dataset), 'val dataloader:', len(val_dataloader))
-        
-        # configure train and validation dataloader
-        if not self.load_and_convert:
-            train_dataloader, val_dataloader = self.load_data()            
+
 
         # compute normalizer on the main process and save to disk
         normalizer_path = os.path.join(self.output_dir, 'normalizer.pkl')
@@ -212,6 +213,7 @@ class TrainACTWorkspace(BaseWorkspace):
                     # device transfer
                     batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
 
+                    # normalizer is in a model forward
                     # forward dict is a loss dict
                     forward_dict = self.model(batch)
                     loss = forward_dict['loss']

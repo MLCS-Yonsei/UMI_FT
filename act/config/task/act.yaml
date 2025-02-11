@@ -77,8 +77,8 @@ shape_meta: &shape_meta
     rotation_rep: rotation_6d
 
 task_name: &task_name act
-dataset_path: GoPro2/dataset.zarr.zip
-hdf5_path: GoPro/
+dataset_path: /home/soochul/GoPro_20250117/dataset.zarr.zip
+hdf5_path: /home/soochul/GoPro_hdf5/
 pose_repr: &pose_repr
   obs_pose_repr: relative # abs or rel
   action_pose_repr: relative # abs or rel or delta
@@ -87,7 +87,7 @@ env_runner:
   _target_: diffusion_policy.env_runner.real_pusht_image_runner.RealPushTImageRunner
 
 dataset:
-  _target_: act.dataset.act_dataset_ft.ACTDataset
+  _target_: act.dataset.act_dataset.ACTDataset
   shape_meta: *shape_meta
   dataset_path: ${task.dataset_path}
   hdf5_path: ${task.hdf5_path}
