@@ -1,3 +1,12 @@
+import sys
+import os
+
+# Get the absolute path of the UMI_FT directory
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+
+# Add UMI_FT to Python path
+sys.path.append(project_root)
+
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as transforms
@@ -18,7 +27,6 @@ class ACTPolicy(nn.Module):
                  kl_weight,
                  lr_backbone,
                  nheads,
-                 shape_meta : dict,
                  state_dim,
 
                  # backbone
@@ -84,6 +92,9 @@ class ACTPolicy(nn.Module):
 
         self.normalizer = LinearNormalizer()
 
+    @property
+    def device(self):
+        return next(iter(self.parameters())).device
     
     def __call__(self, data):
         '''
@@ -126,7 +137,6 @@ class ACTPolicy(nn.Module):
 
         '''
         env_state = None
-        images = None
 
         obs_dict = data['obs']
         action = data['action'] 
@@ -134,12 +144,15 @@ class ACTPolicy(nn.Module):
         
         # normalize input
         nobs = self.normalizer.normalize(obs_dict)
+        images = nobs['images']
+        # print("nobs: ", nobs)
         nactions = self.normalizer['action'].normalize(action)
+        # print("nactions: ", nactions)
         batch_size = nactions.shape[0]
 
-        # extract low dim obs
+        # extract low dim nobs
         low_dim_keys = ['eef_pos', 'eef_rot', 'gripper_width']
-        low_dim_data = torch.cat([obs_dict[key] for key in low_dim_keys if key in obs_dict], dim=-1)
+        low_dim_data = torch.cat([nobs[key] for key in low_dim_keys if key in nobs], dim=-1)
 
         if nactions is not None: # training time
             actions = nactions[:, :self.model.num_queries]
@@ -162,9 +175,6 @@ class ACTPolicy(nn.Module):
         else: # inference time
             a_hat, _, (_, _) = self.model(low_dim_data, images, env_state) # no action, sample from prior
             return a_hat
-    
-    def configure_optimizers(self):
-        return self.optimizer
 
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())

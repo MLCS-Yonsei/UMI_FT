@@ -92,6 +92,10 @@ class DETRVAE(nn.Module):
             actions: batch, action_seq, 3 + 6 + 1
         
         """
+        # print("qpos shape: ", qpos.shape) # bs, 10
+        # print("actions shape: ", actions.shape) # bs, 100, 10
+        # print("image shape: ", image.shape) # bs, 1, 3, 224, 224
+        # print("ispad shape: ", is_pad.shape) # bs, 100
         is_training = actions is not None # train or val
         bs, _ = qpos.shape
         ### Obtain latent z from action sequence
@@ -103,13 +107,14 @@ class DETRVAE(nn.Module):
             cls_embed = self.cls_embed.weight # (1, hidden_dim)
             cls_embed = torch.unsqueeze(cls_embed, axis=0).repeat(bs, 1, 1) # (bs, 1, hidden_dim)
             encoder_input = torch.cat([cls_embed, qpos_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim) # TODO : isn't it seq+2?
-            encoder_input = encoder_input.permute(1, 0, 2) # (seq+1, bs, hidden_dim)
+            encoder_input = encoder_input.permute(1, 0, 2) # (seq+1, bs, hidden_dim) # seq+2, bs, hidden_dim
             # do not mask cls token
             cls_joint_is_pad = torch.full((bs, 2), False).to(qpos.device) # False: not a padding
             is_pad = torch.cat([cls_joint_is_pad, is_pad], axis=1)  # (bs, seq+1)
             # obtain position embedding
             pos_embed = self.pos_table.clone().detach()
             pos_embed = pos_embed.permute(1, 0, 2)  # (seq+1, 1, hidden_dim) TODO : if chunk size or num_queries is wrong, this make error
+            # seq + 2, 1, hidden_dim
             # query model
             encoder_output = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad) # (seq+2, bs, hidden_dim) (102, 1, hidden_dim) (bs, seq+2)
             encoder_output = encoder_output[0] # take cls output only
@@ -130,7 +135,6 @@ class DETRVAE(nn.Module):
             for cam_id, cam_name in enumerate(self.camera_names):
                 features, pos = self.backbones[0](image[:, cam_id]) # HARDCODED # (bs, channels, H, W)
                 features = features[0] # take the last layer feature 
-                print(features.shape)
                 pos = pos[0] # (bs, 512, 56, 56)
                 all_cam_features.append(self.input_proj(features)) # Conv2d (512, 512, kernel_size=(1, 1), stride=(1, 1))
                 all_cam_pos.append(pos)

@@ -34,6 +34,8 @@ from act.common.pytorch_util import compute_dict_mean, detach_dict
 from act.dataset.act_dataset import ACTDataset
 from act.common.data_converter import ACTDataConverter
 
+import time
+
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
@@ -60,7 +62,6 @@ class TrainACTWorkspace(BaseWorkspace):
             {'params': self.model.model.parameters()},
         ]
 
-        
         # configure optimizer
         optimizer_cfg = OmegaConf.to_container(cfg.optimizer, resolve=True)
         optimizer_cfg.pop('_target_')
@@ -74,40 +75,13 @@ class TrainACTWorkspace(BaseWorkspace):
         # configure training state
         self.global_step = 0
         self.epoch = 0
-
         self.num_episodes = self.cfg.num_episodes
 
         # do not save optimizer if resume=False
         if not cfg.training.resume:
             self.exclude_keys = ['optimizer']
         
-        self.convert_data = False
-        
-            
-
-    def load_data(self):
-        train_ratio = 1 - self.cfg.task.dataset.val_ratio
-        shuffled_indices = np.random.permutation(self.num_episodes)
-        train_indices = shuffled_indices[:int(train_ratio * self.num_episodes)]
-        val_indices = shuffled_indices[int(train_ratio * self.num_episodes):]
-        
-        print("Loading Dataset")
-
-        train_dataset : ACTDataset
-        train_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=train_indices, camera_names=self.cfg.camera_names)
-
-        val_dataset : ACTDataset
-        val_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=val_indices, camera_names=self.cfg.camera_names)
-
-
-        # train_dataset = ACTDataset(train_indices, **self.cfg.task.dataset)
-        # val_dataset = ACTDataset(val_indices, **self.cfg.task.dataset)
-        train_dataloader = DataLoader(train_dataset, **self.cfg.dataloader)
-        val_dataloader = DataLoader(val_dataset, **self.cfg.val_dataloader)
-        print('train dataset:', len(train_dataset), 'train dataloader:', len(train_dataloader))
-        print('val dataset:', len(val_dataset), 'val dataloader:', len(val_dataloader))
-        return train_dataset, val_dataset, train_dataloader, val_dataloader
-
+        self.convert_data = True # False
 
         
     def run(self):
@@ -148,20 +122,6 @@ class TrainACTWorkspace(BaseWorkspace):
         normalizer = pickle.load(open(normalizer_path, 'rb'))
         self.model.set_normalizer(normalizer)
 
-
-        # configure env 
-        env_runner: BaseImageRunner
-        env_runner = hydra.utils.instantiate(
-            cfg.task.env_runner,
-            output_dir=self.output_dir)
-        assert isinstance(env_runner, BaseImageRunner)
-
-        # configure checkpoint
-        topk_manager = TopKCheckpointManager(
-            save_dir=os.path.join(self.output_dir, 'checkpoints'),
-            **cfg.checkpoint.topk
-        )
-
         # accelerator
         train_dataloader, val_dataloader, self.model, self.optimizer = accelerator.prepare(
             train_dataloader, val_dataloader, self.model, self.optimizer)
@@ -177,6 +137,7 @@ class TrainACTWorkspace(BaseWorkspace):
             best_ckpt_info = None
 
             for epoch in range(cfg.training.num_epochs):
+                epoch_start_time = time.time()
 
                 # validation
                 with torch.inference_mode():
@@ -195,11 +156,17 @@ class TrainACTWorkspace(BaseWorkspace):
                         min_val_loss = epoch_val_loss
                         best_ckpt_info = (epoch, min_val_loss, deepcopy(policy.state_dict()))
 
-                    print(f'Val loss:   {epoch_val_loss:.5f}')
+                    # print(f'Val loss:   {epoch_val_loss:.5f}')
                     summary_string = ''
                     for k, v in epoch_summary.items():
                         summary_string += f'{k}: {v.item():.3f} '
-                    print(summary_string)
+                    # print(summary_string)
+
+                    val_log = {f"val/{k}": v.item() for k, v in epoch_summary.items()}
+                    val_log['epoch'] = epoch
+                    # Here we log validation metrics using the current global_step
+                    accelerator.log(val_log, step=self.global_step)
+                    json_logger.log(val_log)
 
 
                 # training
@@ -225,19 +192,22 @@ class TrainACTWorkspace(BaseWorkspace):
 
                     # log train history
                     train_history.append(detach_dict(forward_dict))
-                    # step_log = {
-                    #     'train_loss' : loss,
-                    #     'global_step' : self.global_step,
-                    #     'epoch' : self.epoch,
-                    # }
-                    # is_last_batch = (batch_idx == (len(train_dataloader)-1))
-                    # if not is_last_batch:
-                    #     accelerator.log(step_log, step=self.global_step)
-                    #     json_logger.log(step_log)
-                    #     self.global_step += 1
+                    step_log = {
+                        'train_loss' : loss,
+                        'l1_loss': forward_dict['l1'].item() if 'l1' in forward_dict else None,
+                        'kl_loss': forward_dict['kl'].item() if 'kl' in forward_dict else None,
+                        'global_step' : self.global_step,
+                        'epoch' : self.epoch,
+                    }
+                    accelerator.log(step_log, step=self.global_step)
+                    json_logger.log(step_log)
+                    self.global_step += 1
                 
                 # training summary
-                epoch_summary = compute_dict_mean(train_history[(batch_idx + 1)*epoch,(batch_idx+1)*(epoch+1)])
+                epoch_duration = time.time() - epoch_start_time
+                print("Epoch duration: ", epoch_duration)
+
+                epoch_summary = compute_dict_mean(train_history[(batch_idx + 1)*epoch : (batch_idx+1)*(epoch+1)])
                 epoch_train_loss = epoch_summary['loss']
                 print(f'Train loss: {epoch_train_loss:.5f}')
                 summary_string = ''
@@ -258,22 +228,35 @@ class TrainACTWorkspace(BaseWorkspace):
                         self.save_checkpoint()
                     if cfg.checkpoint.save_last_snapshot:
                         self.save_snapshot()
-                    
-                    # sanitize metric names
-                    # metric_dict = dict()
-                    # for key, value in step_log.items():
-                    #     new_key = key.replace('/', '_')
-                    #     metric_dict[new_key] = value
-                    # topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
 
-                    # if topk_ckpt_path is not None:
-                    #     self.save_checkpoint(path=topk_ckpt_path)
-
-                    # recover the DDP model
+                    # recover the DDP model (Distributed Data Parallel)
                     self.model = model_ddp
 
         accelerator.end_training()
 
+    def load_data(self):
+        train_ratio = 1 - self.cfg.task.dataset.val_ratio
+        shuffled_indices = np.random.permutation(self.num_episodes)
+        train_indices = shuffled_indices[:int(train_ratio * self.num_episodes)]
+        val_indices = shuffled_indices[int(train_ratio * self.num_episodes):]
+        
+        print("Loading Dataset")
+
+        train_dataset : ACTDataset
+        train_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=train_indices, camera_names=self.cfg.camera_names)
+
+        val_dataset : ACTDataset
+        val_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=val_indices, camera_names=self.cfg.camera_names)
+
+        if not self.convert_data:
+            train_dataset.convert_zarr_to_hdf5()
+            self.convert_data = True
+
+        train_dataloader = DataLoader(train_dataset, **self.cfg.dataloader)
+        val_dataloader = DataLoader(val_dataset, **self.cfg.val_dataloader)
+        print('train dataset:', len(train_dataset), 'train dataloader:', len(train_dataloader))
+        print('val dataset:', len(val_dataset), 'val dataloader:', len(val_dataloader))
+        return train_dataset, val_dataset, train_dataloader, val_dataloader
 
 
 @hydra.main(

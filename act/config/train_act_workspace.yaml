@@ -22,12 +22,11 @@ camera_names : ["top"]
 
 policy:
   _target_: act.policy.act_policy.ACTPolicy
-  lr: 0.00001
+  lr: 5.0e-5
   kl_weight: 10
   lr_backbone: 0.00001
 
   nheads: 8
-  shape_meta: ${shape_meta}
   state_dim: ${state_dim}
 
   # Backbone
@@ -56,14 +55,14 @@ policy:
 
 
 dataloader:
-  batch_size: 8 # 64
+  batch_size: 64
   num_workers: 4
   shuffle: True
   pin_memory: True
   persistent_workers: False
 
 val_dataloader:
-  batch_size: 8 # 64
+  batch_size: 64
   num_workers: 4
   # shuffle: False
   shuffle: True
@@ -82,8 +81,8 @@ training:
   seed: 42
   debug: False
   resume: True
-  num_epochs: 2000
-  batch_size: 8
+  num_epochs: 8000
+  batch_size: 64
   eval: false
   # training loop control
   # in epochs

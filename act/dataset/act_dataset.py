@@ -19,13 +19,13 @@ from act.common.normalize_util import (
 from act.common.pose_repr_util import convert_pose_mat_rep
 from act.common.pytorch_util import dict_apply
 from act.common.replay_buffer import ReplayBuffer
-from act.common.sampler import ACTSequenceSampler, get_val_mask
 from act.common.data_converter import ACTDataConverter
 from act.dataset.base_dataset import BaseDataset
 from act.common.normalizer import LinearNormalizer
 from act.common.pose_util import pose_to_mat, mat_to_pose10d
 
 from act.common.sampler import ACTSampler
+import h5py
 
 register_codecs()
 
@@ -46,7 +46,7 @@ class ACTDataset(BaseDataset):
         seed: int = 42,
         val_ratio: float = 0.0,
         max_duration: float = None,
-        do_convert: bool = False):
+        ):
 
         self.dataset_path = dataset_path
         self.episode_indices = episode_indices
@@ -79,21 +79,15 @@ class ACTDataset(BaseDataset):
         self.key_latency_steps = key_latency_steps
         self.key_down_sample_steps = key_down_sample_steps
 
-
-        # Convert Zarr to hdf5
-        converter = None
-        if do_convert:
-            converter = self.covert_zarr_to_hdf5(hdf5_path=hdf5_path)
         
         # Define sampler
         sampler = ACTSampler(
-            episode_indices=episode_indices,
+            episode_indices=self.episode_indices,
             hdf5_path=hdf5_path,
             cam_names=camera_names,
         )
 
         self.sampler = sampler
-        self.converter = converter
 
 
     def __len__(self):
@@ -141,16 +135,13 @@ class ACTDataset(BaseDataset):
             
             
         '''
-        # sample data
-        data = self.sampler.sample_item(idx)
-        return data
+        return self.sampler.sample_item(idx)
 
-
-    def covert_zarr_to_hdf5(self, hdf5_path):
+    def convert_zarr_to_hdf5(self):
         converter = ACTDataConverter(
             shape_meta=self.shape_meta,
             replay_buffer=self.replay_buffer,
-            hdf5_path=hdf5_path,
+            hdf5_path=self.hdf5_path,
             rgb_keys=self.rgb_keys,
             lowdim_keys=self.lowdim_keys,
             key_horizon=self.key_horizon,
@@ -249,3 +240,82 @@ class ACTDataset(BaseDataset):
             )
 
         return replay_buffer
+
+    def get_normalizer(self, **kwargs) -> LinearNormalizer:
+        normalizer = LinearNormalizer()
+
+        # enumerate the dataset and save low_dim data
+        data_cache = {key: list() for key in self.lowdim_keys + ['action']}
+        
+        for episode_id in self.episode_indices:
+            dataset_path = os.path.join(self.hdf5_path, f"ep_{episode_id}.hdf5")
+            with h5py.File(dataset_path, 'r') as root:
+                for key in self.lowdim_keys:
+                    if key.endswith('pos'):
+                        arr = root['/observations/eef_pos'][()]
+                    elif key.endswith('angle'):
+                        arr = root['/observations/eef_rot'][()]
+                    elif key.endswith('width'):
+                        arr = root[f'/observations/gripper_width'][()]
+                    else:
+                        pass
+                    data_cache[key].append(arr)
+                
+                action_arr = root[f'/action'][()]
+                data_cache['action'].append(action_arr)
+        
+        for key in data_cache:
+            data_cache[key] = np.stack(data_cache[key], axis=0)
+            B, T = data_cache[key].shape[0], data_cache[key].shape[1]
+            if not self.temporally_independent_normalization:
+                data_cache[key] = data_cache[key].reshape(B * T, -1)
+            
+
+        action_data = data_cache['action']
+        action_dim = action_data.shape[-1]
+        if action_dim % self.num_robot != 0:
+            raise ValueError("Action dimension is not divisible by num_robot.")
+        dim_a = action_dim // self.num_robot
+
+        action_normalizers = []
+        for i in range(self.num_robot):
+            # Assume the first 3 dims correspond to position.
+            pos_stats = array_to_stats(action_data[..., i * dim_a : i * dim_a + 3])
+            action_normalizers.append(get_range_normalizer_from_stat(pos_stats))
+            # Assume the next dims (from 3 to dim_a-1) correspond to rotation.
+            rot_stats = array_to_stats(action_data[..., i * dim_a + 3 : (i + 1) * dim_a - 1])
+            action_normalizers.append(get_identity_normalizer_from_stat(rot_stats))
+            # Assume the last dimension corresponds to the gripper.
+            grip_stats = array_to_stats(action_data[..., (i + 1) * dim_a - 1 : (i + 1) * dim_a])
+            action_normalizers.append(get_range_normalizer_from_stat(grip_stats))
+        normalizer['action'] = concatenate_normalizer(action_normalizers)
+        
+        for key in self.lowdim_keys:
+            stats = array_to_stats(data_cache[key])
+            # Choose the normalization function based on key name.
+            if key.endswith('pos') or ('pos_wrt' in key) or key.endswith('pos_abs'):
+                norm_fn = get_range_normalizer_from_stat(stats)
+                normalizer['eef_pos'] = norm_fn
+            elif key.endswith('rot') or key.endswith('rot_axis_angle'):
+                norm_fn = get_identity_normalizer_from_stat(stats)
+                normalizer['eef_rot'] = norm_fn
+            elif key.endswith('gripper_width'):
+                norm_fn = get_range_normalizer_from_stat(stats)
+                normalizer['gripper_width'] = norm_fn
+            elif key.endswith('force'):
+                norm_fn = get_range_normalizer_from_stat(stats)
+            elif key.endswith('torque'):
+                norm_fn = get_range_normalizer_from_stat(stats)
+            else:
+                pass
+                # raise RuntimeError(f"Unsupported low-dimensional key for normalization: {key}")
+        
+        for key in self.rgb_keys:
+            normalizer['images'] = get_image_identity_normalizer()
+        
+        return normalizer
+
+
+
+        
+
