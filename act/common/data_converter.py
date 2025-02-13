@@ -81,7 +81,11 @@ class ACTDataConverter:
         for key in self.lowdim_keys:
             if not 'wrt' in key:
                 self.sampler_lowdim_keys.append(key)
-        
+        # print("Converter low dim keys : ", self.lowdim_keys) 
+        # ['robot0_eef_pos', 'robot0_eef_rot_axis_angle', 'robot0_gripper_width', 'robot0_eef_rot_axis_angle_wrt_start', 'robot0_force', 'robot0_torque']
+        # print("Converter sampler low dim keys : ", self.sampler_lowdim_keys)
+        # ['robot0_eef_pos', 'robot0_eef_rot_axis_angle', 'robot0_gripper_width', 'robot0_force', 'robot0_torque']
+
         print("Extracting replay buffer")
         self.extract_replay_buffer(replay_buffer)
 
@@ -160,17 +164,18 @@ class ACTDataConverter:
                     if key in self.replay_buffer:
                         actions.append(self.replay_buffer[key])
             self.replay_buffer['action'] = np.concatenate(actions, axis=-1)
+        
+        # print("Extracted replay buffer keys: ", self.replay_buffer.keys())
+        # dict_keys(['robot0_eef_pos', 'robot0_eef_rot_axis_angle', 'robot0_gripper_width', 'robot0_force', 'robot0_torque', 'robot0_demo_end_pose', 'robot0_demo_start_pose', 'camera0_rgb', 'action'])
+
 
     def preprocess_episodes(self):
         '''
-            replay_buffer -> input array -> processing -> dict()
-
             process list
             - latency
             - downsample
             - interpolation
             - repeat frame before first grasp
-
             - image processing
             - relative pose
             - action processing
@@ -188,7 +193,6 @@ class ACTDataConverter:
             
             => Calculate interpolated idx and slice the data array
 
-        
         '''
         result = dict()
         obs_keys = self.rgb_keys + self.sampler_lowdim_keys
@@ -257,7 +261,7 @@ class ACTDataConverter:
             obs_dict[key] = data[key].astype(np.float32)
             del data[key]
         
-
+        print("postprocess obs dict keys: ", obs_dict.keys())
         # generate relative pose between two ees
         for robot_id in range(self.num_robot):
             # convert pose to mat

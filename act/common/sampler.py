@@ -39,7 +39,6 @@ class ACTSampler:
 
 
     def sample_item(self, index):
-
         episode_id = self.episode_indices[index]
         dataset_path = os.path.join(self.hdf5_path, f'ep_{episode_id}.hdf5')
         with h5py.File(dataset_path, 'r') as root:

@@ -80,7 +80,7 @@ training:
   device: "cuda:0"
   seed: 42
   debug: False
-  resume: True
+  resume: False
   num_epochs: 8000
   batch_size: 64
   eval: false

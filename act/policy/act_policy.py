@@ -95,6 +95,9 @@ class ACTPolicy(nn.Module):
     @property
     def device(self):
         return next(iter(self.parameters())).device
+
+    def configure_optimizers(self):
+        return self.optimizer
     
     def __call__(self, data):
         '''
@@ -154,9 +157,14 @@ class ACTPolicy(nn.Module):
         low_dim_keys = ['eef_pos', 'eef_rot', 'gripper_width']
         low_dim_data = torch.cat([nobs[key] for key in low_dim_keys if key in nobs], dim=-1)
 
+        # print("low dim data: ", low_dim_data.shape) # bs, 10
+        # print("image: ", images.shape) # bs, 1, 3, 224, 224
+        # print("actions: ", nactions.shape) # bs, ep max length, 10
+
         if nactions is not None: # training time
             actions = nactions[:, :self.model.num_queries]
             is_pad = is_pad[:, :self.model.num_queries]
+            # print("sliced actions: ", actions.shape) # bs, chunk size, 10
 
             a_hat, is_pad_hat, (mu, logvar) = self.model(low_dim_data, images, env_state, actions, is_pad)
 

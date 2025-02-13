@@ -66,7 +66,7 @@ class ACTDataset(BaseDataset):
 
         # Load replay buffer
         print("Loading zarr")
-        replay_buffer = self.load_zarr(cache_dir=cache_dir)
+        replay_buffer = self.load_zarr()
         self.replay_buffer = replay_buffer
 
         # Solve key and attribute
@@ -94,47 +94,6 @@ class ACTDataset(BaseDataset):
         return len(self.sampler)
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        '''
-            sampler -> dataset -> dataloader -> model
-
-            sampler
-                
-                {'obs': obs, 'action': action, 'is_pad': is_pad}
-
-            dataset
-
-                torch_data = {
-                    'obs': dict_apply(obs_dict, torch.from_numpy),
-                    'action': torch.from_numpy(data['action'].astype(np.float32))
-                }
-            
-            model
-                
-                obs_dict = data['obs']
-                action = data['action']
-
-            
-            define dataloader
-            train_dataset = ACTDataset(train_indices, **self.cfg.task.dataset)
-            train_dataloader = DataLoader(train_dataset, **self.cfg.dataloader)
-            
-            training loop
-            for batch in train_dataloader:
-                batch = dict_apply(batch, device)
-
-                forward_dict = self.model(batch)
-                loss = forward_dict['loss']
-                loss.backward
-
-            
-            model input
-            def __call__(self, data):
-                obs_dict = data['obs']
-                action = data['action']
-                ...
-            
-            
-        '''
         return self.sampler.sample_item(idx)
 
     def convert_zarr_to_hdf5(self):
@@ -193,7 +152,6 @@ class ACTDataset(BaseDataset):
         return rgb_keys, lowdim_keys, key_horizon, key_down_sample_steps, key_latency_steps
 
     def load_zarr(self, cache_dir=None):
-        print(f"Dataset path: {self.dataset_path}")
         if cache_dir is None:
             # load into memory store
             with zarr.ZipStore(self.dataset_path, mode='r') as zip_store:

@@ -46,7 +46,7 @@ class TrainACTWorkspace(BaseWorkspace):
     def __init__(self, cfg: OmegaConf, output_dir = None):
         super().__init__(cfg, output_dir=output_dir)
 
-        print(output_dir)
+        # print(output_dir)
 
         # set seed
         seed = cfg.training.seed
@@ -57,20 +57,20 @@ class TrainACTWorkspace(BaseWorkspace):
         # configure model
         self.model: ACTPolicy = hydra.utils.instantiate(cfg.policy)
 
-        # configure params
-        param_groups = [
-            {'params': self.model.model.parameters()},
-        ]
+        # # configure params
+        # param_groups = [
+        #     {'params': self.model.model.parameters()},
+        # ]
 
-        # configure optimizer
-        optimizer_cfg = OmegaConf.to_container(cfg.optimizer, resolve=True)
-        optimizer_cfg.pop('_target_')
-        self.optimizer = torch.optim.AdamW(
-            params=param_groups,
-            **optimizer_cfg
-        )
-        # TODO : modify ACT code for hydra
-        # self.optimizer = self.model.configure_optimizers()
+        # # configure optimizer
+        # optimizer_cfg = OmegaConf.to_container(cfg.optimizer, resolve=True)
+        # optimizer_cfg.pop('_target_')
+        # self.optimizer = torch.optim.AdamW(
+        #     params=param_groups,
+        #     **optimizer_cfg
+        # )
+
+        self.optimizer = self.model.configure_optimizers()
 
         # configure training state
         self.global_step = 0
@@ -127,6 +127,12 @@ class TrainACTWorkspace(BaseWorkspace):
             train_dataloader, val_dataloader, self.model, self.optimizer)
         device = self.model.device
         
+        # configure checkpoint
+        topk_manager = TopKCheckpointManager(
+            save_dir=os.path.join(self.output_dir, 'checkpoints'),
+            **cfg.checkpoint.topk
+        )
+
         # TODO change to ACT style
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
@@ -136,8 +142,12 @@ class TrainACTWorkspace(BaseWorkspace):
             min_val_loss = np.inf
             best_ckpt_info = None
 
-            for epoch in range(cfg.training.num_epochs):
-                epoch_start_time = time.time()
+            if accelerator.is_main_process:
+                epoch_pbar = tqdm.tqdm(range(cfg.training.num_epochs), desc="Epochs")
+            else:
+                epoch_pbar = range(cfg.training.num_epochs)
+
+            for epoch in epoch_pbar:
 
                 # validation
                 with torch.inference_mode():
@@ -157,9 +167,9 @@ class TrainACTWorkspace(BaseWorkspace):
                         best_ckpt_info = (epoch, min_val_loss, deepcopy(policy.state_dict()))
 
                     # print(f'Val loss:   {epoch_val_loss:.5f}')
-                    summary_string = ''
-                    for k, v in epoch_summary.items():
-                        summary_string += f'{k}: {v.item():.3f} '
+                    # summary_string = ''
+                    # for k, v in epoch_summary.items():
+                    #     summary_string += f'{k}: {v.item():.3f} '
                     # print(summary_string)
 
                     val_log = {f"val/{k}": v.item() for k, v in epoch_summary.items()}
@@ -197,40 +207,35 @@ class TrainACTWorkspace(BaseWorkspace):
                         'l1_loss': forward_dict['l1'].item() if 'l1' in forward_dict else None,
                         'kl_loss': forward_dict['kl'].item() if 'kl' in forward_dict else None,
                         'global_step' : self.global_step,
-                        'epoch' : self.epoch,
                     }
                     accelerator.log(step_log, step=self.global_step)
                     json_logger.log(step_log)
                     self.global_step += 1
                 
                 # training summary
-                epoch_duration = time.time() - epoch_start_time
-                print("Epoch duration: ", epoch_duration)
-
                 epoch_summary = compute_dict_mean(train_history[(batch_idx + 1)*epoch : (batch_idx+1)*(epoch+1)])
-                epoch_train_loss = epoch_summary['loss']
-                print(f'Train loss: {epoch_train_loss:.5f}')
-                summary_string = ''
-                for k, v in epoch_summary.items():
-                    summary_string += f'{k}: {v.item():.3f} '
-                print(summary_string)
+                # epoch_train_loss = epoch_summary['loss']
+                # print(f'Train loss: {epoch_train_loss:.5f}')
+                # summary_string = ''
+                # for k, v in epoch_summary.items():
+                #     summary_string += f'{k}: {v.item():.3f} '
+                # print(summary_string)
 
                 # Checkpointing
                 if (epoch % cfg.training.checkpoint_every) == 0 and accelerator.is_main_process:
-                    best_epoch, min_val_loss, best_state_dict = best_ckpt_info
-                    print(f'Training finished: val loss {min_val_loss:.6f} at epoch {best_epoch}')
-
+                                        
                     model_ddp = self.model
                     self.model = accelerator.unwrap_model(self.model)
 
                     # checkpointing
                     if cfg.checkpoint.save_last_ckpt:
-                        self.save_checkpoint()
-                    if cfg.checkpoint.save_last_snapshot:
-                        self.save_snapshot()
+                        self.save_checkpoint(tag=f'epoch={epoch:04d}.ckpt')
 
                     # recover the DDP model (Distributed Data Parallel)
                     self.model = model_ddp
+                    
+        best_epoch, min_val_loss, best_state_dict = best_ckpt_info
+        self.save_checkpoint(tag=f'best_epoch={best_epoch:04d}.ckpt')
 
         accelerator.end_training()
 

@@ -92,7 +92,7 @@ class DETRVAE(nn.Module):
             actions: batch, action_seq, 3 + 6 + 1
         
         """
-        # print("qpos shape: ", qpos.shape) # bs, 10
+        # print("low dim shape: ", qpos.shape) # bs, 10
         # print("actions shape: ", actions.shape) # bs, 100, 10
         # print("image shape: ", image.shape) # bs, 1, 3, 224, 224
         # print("ispad shape: ", is_pad.shape) # bs, 100
