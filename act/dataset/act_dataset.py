@@ -215,6 +215,12 @@ class ACTDataset(BaseDataset):
                         arr = root['/observations/eef_rot'][()]
                     elif key.endswith('width'):
                         arr = root[f'/observations/gripper_width'][()]
+                    elif key.endswith('start'):
+                        arr = root['/observations/eef_rot_start'][()]
+                    elif key.endswith('force'):
+                        arr = root['/observations/force'][()]
+                    elif key.endswith('torque'):
+                        arr = root['/observations/torque'][()]
                     else:
                         pass
                     data_cache[key].append(arr)
@@ -260,10 +266,15 @@ class ACTDataset(BaseDataset):
             elif key.endswith('gripper_width'):
                 norm_fn = get_range_normalizer_from_stat(stats)
                 normalizer['gripper_width'] = norm_fn
+            elif key.endswith('start'):
+                norm_fn = get_range_normalizer_from_stat(stats)
+                normalizer['eef_rot_start'] = norm_fn
             elif key.endswith('force'):
                 norm_fn = get_range_normalizer_from_stat(stats)
+                normalizer['force'] = norm_fn
             elif key.endswith('torque'):
                 norm_fn = get_range_normalizer_from_stat(stats)
+                normalizer['torque'] = norm_fn
             else:
                 pass
                 # raise RuntimeError(f"Unsupported low-dimensional key for normalization: {key}")

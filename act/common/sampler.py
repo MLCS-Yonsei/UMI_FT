@@ -48,6 +48,7 @@ class ACTSampler:
             # get observation at start timestep only
             pos = root['/observations/eef_pos'][start_ts]
             rot = root['/observations/eef_rot'][start_ts]
+            rot_start = root['/observations/eef_rot_start'][start_ts] # rotation axis angle w.r.t start 
             width = root['/observations/gripper_width'][start_ts]
 
             image_dict = dict()
@@ -80,6 +81,7 @@ class ACTSampler:
         obs = {
             'eef_pos': torch.from_numpy(pos).float(),
             'eef_rot': torch.from_numpy(rot).float(),
+            'eef_rot_start': torch.from_numpy(rot_start).float(),
             'gripper_width' : torch.from_numpy(width).float(),
             'images' : torch.from_numpy(all_cam_images),
         }

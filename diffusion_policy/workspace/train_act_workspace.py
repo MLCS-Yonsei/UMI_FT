@@ -27,7 +27,11 @@ from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
 from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
 from diffusion_policy.common.json_logger import JsonLogger
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
+from diffusion_policy.model.common.lr_scheduler import get_scheduler
 from accelerate import Accelerator
+
+from copy import deepcopy
+
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
@@ -117,6 +121,7 @@ class TrainACTWorkspace(BaseWorkspace):
         # load normalizer on all processes
         accelerator.wait_for_everyone()
         normalizer = pickle.load(open(normalizer_path, 'rb'))
+        self.model.set_normalizer(normalizer)
 
         # configure validation dataset
         val_dataset = dataset.get_validation_dataset()
@@ -124,20 +129,19 @@ class TrainACTWorkspace(BaseWorkspace):
         print('train dataset:', len(dataset), 'train dataloader:', len(train_dataloader))
         print('val dataset:', len(val_dataset), 'val dataloader:', len(val_dataloader))
 
-        self.model.set_normalizer(normalizer)
-
+        
         # configure lr scheduler # TODO we do not need learning rate scheduler
-        lr_scheduler = get_scheduler(
-            cfg.training.lr_scheduler,
-            optimizer=self.optimizer,
-            num_warmup_steps=cfg.training.lr_warmup_steps,
-            num_training_steps=(
-                len(train_dataloader) * cfg.training.num_epochs) \
-                    // cfg.training.gradient_accumulate_every,
-            # pytorch assumes stepping LRScheduler every epoch
-            # however huggingface diffusers steps it every batch
-            last_epoch=self.global_step-1
-        )
+        # lr_scheduler = get_scheduler(
+        #     cfg.training.lr_scheduler,
+        #     optimizer=self.optimizer,
+        #     num_warmup_steps=cfg.training.lr_warmup_steps,
+        #     num_training_steps=(
+        #         len(train_dataloader) * cfg.training.num_epochs) \
+        #             // cfg.training.gradient_accumulate_every,
+        #     # pytorch assumes stepping LRScheduler every epoch
+        #     # however huggingface diffusers steps it every batch
+        #     last_epoch=self.global_step-1
+        # )
 
         # configure env 
         env_runner: BaseImageRunner
@@ -152,9 +156,8 @@ class TrainACTWorkspace(BaseWorkspace):
             **cfg.checkpoint.topk
         )
         # accelerator
-        train_dataloader, val_dataloader, self.model, self.optimizer, lr_scheduler = accelerator.prepare(
-            train_dataloader, val_dataloader, self.model, self.optimizer, lr_scheduler
-        )
+        train_dataloader, val_dataloader, self.model, self.optimizer = accelerator.prepare(
+            train_dataloader, val_dataloader, self.model, self.optimizer)
         device = self.model.device
 
         # save batch for sampling
@@ -164,11 +167,11 @@ class TrainACTWorkspace(BaseWorkspace):
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
         with JsonLogger(log_path) as json_logger:
-
             train_history = []
             validation_history = []
             min_val_loss = np.inf
             best_ckpt_info = None
+
             for epoch in range(cfg.training.num_epochs):
                 # validation
                 with torch.inference_mode():

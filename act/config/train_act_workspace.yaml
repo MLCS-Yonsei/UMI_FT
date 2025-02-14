@@ -14,7 +14,8 @@ eval: false
 onscreen_render: false
 policy_class: "ACT"             
 temporal_agg: false
-state_dim: 10
+state_dim: 16 # 10
+action_dim: 10
 chunk_size: 100
 num_episodes: 205
 camera_names : ["top"]
@@ -28,6 +29,7 @@ policy:
 
   nheads: 8
   state_dim: ${state_dim}
+  action_dim: ${action_dim}
 
   # Backbone
   backbone: "resnet18"
@@ -81,7 +83,7 @@ training:
   seed: 42
   debug: False
   resume: False
-  num_epochs: 8000
+  num_epochs: 1 # 16000
   batch_size: 64
   eval: false
   # training loop control

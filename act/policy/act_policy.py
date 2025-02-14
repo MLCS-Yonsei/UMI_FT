@@ -28,6 +28,7 @@ class ACTPolicy(nn.Module):
                  lr_backbone,
                  nheads,
                  state_dim,
+                 action_dim,
 
                  # backbone
                  backbone,
@@ -61,6 +62,7 @@ class ACTPolicy(nn.Module):
             'lr_backbone': lr_backbone,
             'nheads': nheads,
             'state_dim' : state_dim,
+            'action_dim': action_dim,
 
             'backbone': backbone,
             'dilation': dilation,
@@ -100,64 +102,30 @@ class ACTPolicy(nn.Module):
         return self.optimizer
     
     def __call__(self, data):
-        '''
-            input : dict type batch data
-
-            data = {
-
-                'obs' : obs_dict <torch.from_numpy>
-
-                'action' : action_list <torch.from_numpy>
-            }
-
-            obs_dict 
-                - key : robot_eef_pos, robot_eef_rot_axis_angle, robot_gripper_width, robot_ robot_force, robot_torque
-                - robot_eef_pos : 3d
-                - robot_eef_rot_axis_angle: 6d
-                - robot_gripper_width : 1d
-                - robot_force: 3d
-                - robot_torque: 3d
-
-            action_list
-                - concat ([ action_pose , action_gripper ])
-                - action_pose : 10d
-                - action_gripper : 1d
-            
-            model : DETRVAE
-
-                - forward ( qpos, image, env_state, actions=None, is_pad=None )
-                    qpos: batch, qpos_dim
-                    image: batch, num_cam, channel, height, width
-                    env_state: None
-                    actions: batch, seq, action_dim
-            
-            B : batch size
-            T : temporal sequence length, the number of time steps in sequence data
-            C : channels : 3
-            H : height : 224
-            W : width : 224
-            D: data dimension, the size of the feature vector for low dimensional data
-
-        '''
         env_state = None
 
         obs_dict = data['obs']
-        action = data['action'] 
+        if 'action' not in data.keys():
+            action = None
+            nactions = None
+        else:
+            action = data['action']
+            nactions = self.normalizer['action'].normalize(action)
         is_pad = data['is_pad']
         
         # normalize input
         nobs = self.normalizer.normalize(obs_dict)
         images = nobs['images']
         # print("nobs: ", nobs)
-        nactions = self.normalizer['action'].normalize(action)
+        # nactions = self.normalizer['action'].normalize(action)
         # print("nactions: ", nactions)
         batch_size = nactions.shape[0]
 
         # extract low dim nobs
-        low_dim_keys = ['eef_pos', 'eef_rot', 'gripper_width']
+        low_dim_keys = ['eef_pos', 'eef_rot', 'eef_rot_start', 'gripper_width']
         low_dim_data = torch.cat([nobs[key] for key in low_dim_keys if key in nobs], dim=-1)
 
-        # print("low dim data: ", low_dim_data.shape) # bs, 10
+        # print("low dim data: ", low_dim_data.shape) # bs, 10 -> 16
         # print("image: ", images.shape) # bs, 1, 3, 224, 224
         # print("actions: ", nactions.shape) # bs, ep max length, 10
 

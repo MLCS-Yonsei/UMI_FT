@@ -33,7 +33,7 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
 class DETRVAE(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names):
+    def __init__(self, backbones, transformer, encoder, state_dim, action_dim, num_queries, camera_names):
         """ Initializes the model.
         Parameters:
             backbones: torch module of the backbone to be used. See backbone.py
@@ -49,7 +49,8 @@ class DETRVAE(nn.Module):
         self.transformer = transformer
         self.encoder = encoder
         hidden_dim = transformer.d_model
-        self.action_head = nn.Linear(hidden_dim, state_dim)
+        # self.action_head = nn.Linear(hidden_dim, state_dim)
+        self.action_head = nn.Linear(hidden_dim, action_dim)
         self.is_pad_head = nn.Linear(hidden_dim, 1)
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
         if backbones is not None:
@@ -67,7 +68,8 @@ class DETRVAE(nn.Module):
         # encoder extra parameters
         self.latent_dim = 32 # final size of latent z # TODO tune
         self.cls_embed = nn.Embedding(1, hidden_dim) # extra cls token embedding
-        self.encoder_action_proj = nn.Linear(state_dim, hidden_dim) # project action to embedding
+        # self.encoder_action_proj = nn.Linear(state_dim, hidden_dim) # project action to embedding
+        self.encoder_action_proj = nn.Linear(action_dim, hidden_dim) # project action to embedding
         self.encoder_joint_proj = nn.Linear(state_dim, hidden_dim)  # project qpos to embedding
         # self.encoder_action_proj = nn.Linear(14, hidden_dim) # project action to embedding
         # self.encoder_joint_proj = nn.Linear(14, hidden_dim)  # project qpos to embedding
@@ -244,6 +246,7 @@ def build_encoder(args):
 def build(args):
     # state_dim = 14 # TODO hardcode
     state_dim = args.state_dim
+    action_dim = args.action_dim
 
     # From state
     # backbone = None # from state for now, no need for conv nets
@@ -261,6 +264,7 @@ def build(args):
         transformer,
         encoder,
         state_dim=state_dim,
+        action_dim=action_dim,
         num_queries=args.num_queries,
         camera_names=args.camera_names,
     )

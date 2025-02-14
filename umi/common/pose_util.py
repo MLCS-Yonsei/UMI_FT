@@ -98,8 +98,8 @@ def mat_to_rot6d(mat):
     return out
 
 def mat_to_pose10d(mat):
-    pos = mat[...,:3,3]
-    rotmat = mat[...,:3,:3]
+    pos = mat[...,:3,3] # 3x1
+    rotmat = mat[...,:3,:3] # 3x3
     d6 = mat_to_rot6d(rotmat)
     d10 = np.concatenate([pos, d6], axis=-1)
     return d10

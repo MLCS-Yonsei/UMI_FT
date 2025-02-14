@@ -78,7 +78,7 @@ shape_meta: &shape_meta
 
 task_name: &task_name act
 dataset_path: /home/soochul/GoPro_20250117/dataset.zarr.zip
-hdf5_path: /home/soochul/GoPro_hdf5/
+hdf5_path: /home/soochul/GoPro_hdf5_2/
 pose_repr: &pose_repr
   obs_pose_repr: relative # abs or rel
   action_pose_repr: relative # abs or rel or delta

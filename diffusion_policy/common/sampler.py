@@ -32,7 +32,13 @@ class SequenceSampler:
         repeat_frame_prob: float=0.0,
         max_duration: Optional[float]=None
     ):
-        episode_ends = replay_buffer.episode_ends[:]
+        episode_ends = replay_buffer.episode_ends[:] # it means all length of each episodes
+        # it has like this form
+        # [  1243   2943   4828   6559   8212  10048  10817  11683  12470  13263
+        #    14114  14985  15887  16774  17916  18903  19904  20960  21961  22943
+        #    23982  24948  25821  26676  27595  28541  29492  30423  31393  32352 ...
+        # [1st_ep_end_time 2nd_ep_end_time ...]
+        # 1st_ep_end_time = 2nd_ep_satrt_time
 
         # load gripper_width
         gripper_width = replay_buffer['robot0_gripper_width'][:, 0]
