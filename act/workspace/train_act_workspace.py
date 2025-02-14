@@ -143,9 +143,9 @@ class TrainACTWorkspace(BaseWorkspace):
             best_ckpt_info = None
 
             if accelerator.is_main_process:
-                epoch_pbar = tqdm.tqdm(range(cfg.training.num_epochs), desc="Epochs")
+                epoch_pbar = tqdm.tqdm(range(cfg.training.num_epochs + 1), desc="Epochs")
             else:
-                epoch_pbar = range(cfg.training.num_epochs)
+                epoch_pbar = range(cfg.training.num_epochs + 1)
 
             for epoch in epoch_pbar:
 

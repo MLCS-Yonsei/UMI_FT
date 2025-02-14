@@ -61,6 +61,8 @@ from umi.real_world.real_inference_util import (get_real_obs_dict,
                                                 get_real_umi_action)
 from umi.common.pose_util import pose_to_mat, mat_to_pose
 
+import pickle
+
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 def solve_table_collision(ee_pose, gripper_width, height_threshold):
@@ -107,11 +109,22 @@ def solve_sphere_collision(ee_poses, robots_config):
                 ee_poses[this_robot_idx][:6] = mat_to_pose(this_sphere_mat_global @ np.linalg.inv(this_sphere_mat_local))
                 ee_poses[that_robot_idx][:6] = mat_to_pose(np.linalg.inv(this_that_mat) @ that_sphere_mat_global @ np.linalg.inv(that_sphere_mat_local))
 
-def get_current_pose():
-    ...
+def get_current_pose(obs, robots_config):
+    episode_start_pose = list()
+    for robot_id in range(len(robots_config)):
+        pose = np.concatenate([
+            obs[f'robot{robot_id}_eef_pos'],
+            obs[f'robot{robot_id}_eef_rot_axis_angle']
+        ], axis=-1)[-1]
+        episode_start_pose.append(pose)
+    return episode_start_pose
 
-def process_actions():
-    ...
+def post_process(action_normalizer, raw_action):
+    # raw_pos = raw_action[..., :3]
+    # raw_rot = raw_action[..., 3:9]
+    # raw_width = raw_action[..., 9:]
+    return action_normalizer.unnormalize(raw_action)
+    
 
 @click.command()
 @click.option('--input', '-i', required=True, help='Path to checkpoint')
@@ -179,7 +192,9 @@ def main(input, output, robot_config,
             out_fov=sim_fov
         )
 
-    print("steps_per_inference:", steps_per_inference)
+    query_frequency = cfg.chunk_size
+    max_ep_length = cfg.max_ep_length
+
     # Shaered Memeory Manager : inter process communication
     # keystroke counter : capture keyboard events for control
     with SharedMemoryManager() as shm_manager:  
@@ -248,28 +263,34 @@ def main(input, output, robot_config,
             workspace: BaseWorkspace
             workspace.load_payload(payload, exclude_keys=None, include_keys=None)
 
+            # load policy
             policy = workspace.model
             obs_pose_rep = cfg.task.pose_repr.obs_pose_repr # relative
             action_pose_repr = cfg.task.pose_repr.action_pose_repr # relative
             print('obs_pose_rep', obs_pose_rep)
             print('action_pose_repr', action_pose_repr)
 
+            # load normalizer
+            normalizer_path = os.path.join(cfg.output_dir, 'normalizer.pkl')
+            normalizer = pickle.load(open(normalizer_path, 'rb'))
+            action_normalizer = normalizer['action']
 
+            # device
             device = torch.device('cuda')
             policy.eval().to(device)
 
             print("Warming up policy inference")
+
+            # get initial obs
             obs = env.get_obs()
-            episode_start_pose = list()
-            for robot_id in range(len(robots_config)):
-                pose = np.concatenate([
-                    obs[f'robot{robot_id}_eef_pos'],
-                    obs[f'robot{robot_id}_eef_rot_axis_angle']
-                ], axis=-1)[-1]
-                episode_start_pose.append(pose)
+
+            # get current pose
+            episode_start_pose = get_current_pose(obs = obs, robots_config=robots_config)
+
             with torch.no_grad():
                 # policy.reset() # ACT policy has no reset function
 
+                # process real obs for act
                 obs_dict_np = get_real_act_obs_dict(
                     env_obs=obs, 
                     shape_meta=cfg.task.shape_meta, 
@@ -277,22 +298,19 @@ def main(input, output, robot_config,
                     tx_robot1_robot0=tx_robot1_robot0,
                     episode_start_pose=episode_start_pose)
                 
-
+                # set device
                 obs_dict = dict_apply(obs_dict_np, 
                     lambda x: torch.from_numpy(x).unsqueeze(0).to(device))
                 
-                # result = policy.predict_action(obs_dict)
-                # TODO
-                # 1. handle timestep t
-                # 2. query frequency
-                # 3. post process action -> get_real_umi_action
 
-
-                # For ACT
+                # query policy
                 all_actions = policy(obs_dict)
-                raw_action = all_actions[:, t % query_frequency] # raw_action = policy(obs_dict)
+
+                # Just for warming up (no temporal emsemble)
+                t = 0
+                raw_action = all_actions[:, t % query_frequency]
                 raw_action = raw_action.squeeze(0).detach().to('cpu').numpy()
-                action = post_process(raw_action)
+                action = post_process(action_normalizer, raw_action)
 
                 # action = result['action_pred'][0].detach().to('cpu').numpy()
 
@@ -457,21 +475,17 @@ def main(input, output, robot_config,
                 # ========== policy control loop ==============
                 try:
                     # start episode
-                    policy.reset()
+                    # policy.reset()
                     start_delay = 1.0
                     eval_t_start = time.time() + start_delay
                     t_start = time.monotonic() + start_delay
                     env.start_episode(eval_t_start)
 
-                    # get current pose
+                    # get current obs
                     obs = env.get_obs()
-                    episode_start_pose = list()
-                    for robot_id in range(len(robots_config)):
-                        pose = np.concatenate([
-                            obs[f'robot{robot_id}_eef_pos'],
-                            obs[f'robot{robot_id}_eef_rot_axis_angle']
-                        ], axis=-1)[-1]
-                        episode_start_pose.append(pose)
+                    
+                    # get current pose
+                    episode_start_pose = get_current_pose(obs = obs, robots_config=robots_config)
 
                     # wait for 1/30 sec to get the closest frame actually
                     # reduces overall latency
@@ -480,7 +494,10 @@ def main(input, output, robot_config,
                     print("Started!")
                     iter_idx = 0
                     perv_target_pose = None
-                    while True:
+
+                    # ACT run during max timesteps
+                    # while True:
+                    for t in range(max_ep_length):
                         # calculate timing
                         t_cycle_end = t_start + (iter_idx + steps_per_inference) * dt
 
@@ -492,107 +509,118 @@ def main(input, output, robot_config,
                         # run inference
                         with torch.no_grad():
                             s = time.time()
-                            obs_dict_np = get_real_umi_obs_dict(
+
+                            # process real obs for act
+                            obs_dict_np = get_real_act_obs_dict(
                                 env_obs=obs, shape_meta=cfg.task.shape_meta, 
                                 obs_pose_repr=obs_pose_rep,
                                 tx_robot1_robot0=tx_robot1_robot0,
                                 episode_start_pose=episode_start_pose)
+                            
+                            # set device
                             obs_dict = dict_apply(obs_dict_np, 
                                 lambda x: torch.from_numpy(x).unsqueeze(0).to(device))
-                            result = policy.predict_action(obs_dict)
-                            raw_action = result['action_pred'][0].detach().to('cpu').numpy()
+                            
+                            # query policy
+                            if t % query_frequency == 0:
+                                all_actions = policy(obs_dict)
+
+                            raw_action = all_actions[:, t % query_frequency]
+
+                            raw_action = raw_action.squeeze(0).detach().to('cpu').numpy()
+
+                            action = post_process(action_normalizer, raw_action)
+
                             action = get_real_umi_action(raw_action, obs, action_pose_repr)
+
                             print('Inference latency:', time.time() - s)
                         
-                        # convert policy action to env actions
-                        this_target_poses = action
+                            # convert policy action to env actions
+                            this_target_poses = action
 
-                        
+                            assert this_target_poses.shape[1] == len(robots_config) * 7
+                            for target_pose in this_target_poses:
+                                for robot_idx in range(len(robots_config)):
+                                    solve_table_collision(
+                                        ee_pose=target_pose[robot_idx * 7: robot_idx * 7 + 6],
+                                        gripper_width=target_pose[robot_idx * 7 + 6],
+                                        height_threshold=robots_config[robot_idx]['height_threshold']
+                                    )
 
-
-                        assert this_target_poses.shape[1] == len(robots_config) * 7
-                        for target_pose in this_target_poses:
-                            for robot_idx in range(len(robots_config)):
-                                solve_table_collision(
-                                    ee_pose=target_pose[robot_idx * 7: robot_idx * 7 + 6],
-                                    gripper_width=target_pose[robot_idx * 7 + 6],
-                                    height_threshold=robots_config[robot_idx]['height_threshold']
+                                # solve collison between two robots
+                                solve_sphere_collision(
+                                    ee_poses=target_pose.reshape([len(robots_config), -1]),
+                                    robots_config=robots_config
                                 )
-                            
-                            # solve collison between two robots
-                            solve_sphere_collision(
-                                ee_poses=target_pose.reshape([len(robots_config), -1]),
-                                robots_config=robots_config
+
+                            # deal with timing
+                            # the same step actions are always the target for
+                            action_timestamps = (np.arange(len(action), dtype=np.float64)
+                                ) * dt + obs_timestamps[-1]
+                            print(dt)
+                            action_exec_latency = 0.01
+                            curr_time = time.time()
+                            is_new = action_timestamps > (curr_time + action_exec_latency)
+                            if np.sum(is_new) == 0:
+                                # exceeded time budget, still do something
+                                this_target_poses = this_target_poses[[-1]]
+                                # schedule on next available step
+                                next_step_idx = int(np.ceil((curr_time - eval_t_start) / dt))
+                                action_timestamp = eval_t_start + (next_step_idx) * dt
+                                print('Over budget', action_timestamp - curr_time)
+                                action_timestamps = np.array([action_timestamp])
+                            else:
+                                this_target_poses = this_target_poses[is_new]
+                                action_timestamps = action_timestamps[is_new]
+
+                            # execute actions
+                            env.exec_actions(
+                                actions=this_target_poses,
+                                timestamps=action_timestamps,
+                                compensate_latency=True
                             )
+                            print(f"Submitted {len(this_target_poses)} steps of actions.")
 
-                        # deal with timing
-                        # the same step actions are always the target for
-                        action_timestamps = (np.arange(len(action), dtype=np.float64)
-                            ) * dt + obs_timestamps[-1]
-                        print(dt)
-                        action_exec_latency = 0.01
-                        curr_time = time.time()
-                        is_new = action_timestamps > (curr_time + action_exec_latency)
-                        if np.sum(is_new) == 0:
-                            # exceeded time budget, still do something
-                            this_target_poses = this_target_poses[[-1]]
-                            # schedule on next available step
-                            next_step_idx = int(np.ceil((curr_time - eval_t_start) / dt))
-                            action_timestamp = eval_t_start + (next_step_idx) * dt
-                            print('Over budget', action_timestamp - curr_time)
-                            action_timestamps = np.array([action_timestamp])
-                        else:
-                            this_target_poses = this_target_poses[is_new]
-                            action_timestamps = action_timestamps[is_new]
-                        
-                        # execute actions
-                        env.exec_actions(
-                            actions=this_target_poses,
-                            timestamps=action_timestamps,
-                            compensate_latency=True
-                        )
-                        print(f"Submitted {len(this_target_poses)} steps of actions.")
+                            # visualize
+                            episode_id = env.replay_buffer.n_episodes
+                            obs_left_img = obs['camera0_rgb'][-1]
+                            obs_right_img = obs['camera0_rgb'][-1]
+                            vis_img = np.concatenate([obs_left_img, obs_right_img], axis=1)
+                            text = 'Episode: {}, Time: {:.1f}'.format(
+                                episode_id, time.monotonic() - t_start
+                            )
+                            cv2.putText(
+                                vis_img,
+                                text,
+                                (10,20),
+                                fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                                fontScale=0.5,
+                                thickness=1,
+                                color=(255,255,255)
+                            )
+                            cv2.imshow('default', vis_img[...,::-1])
 
-                        # visualize
-                        episode_id = env.replay_buffer.n_episodes
-                        obs_left_img = obs['camera0_rgb'][-1]
-                        obs_right_img = obs['camera0_rgb'][-1]
-                        vis_img = np.concatenate([obs_left_img, obs_right_img], axis=1)
-                        text = 'Episode: {}, Time: {:.1f}'.format(
-                            episode_id, time.monotonic() - t_start
-                        )
-                        cv2.putText(
-                            vis_img,
-                            text,
-                            (10,20),
-                            fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-                            fontScale=0.5,
-                            thickness=1,
-                            color=(255,255,255)
-                        )
-                        cv2.imshow('default', vis_img[...,::-1])
+                            _ = cv2.pollKey()
+                            press_events = key_counter.get_press_events()
+                            stop_episode = False
+                            for key_stroke in press_events:
+                                if key_stroke == KeyCode(char='s'):
+                                    # Stop episode
+                                    # Hand control back to human
+                                    print('Stopped.')
+                                    stop_episode = True
 
-                        _ = cv2.pollKey()
-                        press_events = key_counter.get_press_events()
-                        stop_episode = False
-                        for key_stroke in press_events:
-                            if key_stroke == KeyCode(char='s'):
-                                # Stop episode
-                                # Hand control back to human
-                                print('Stopped.')
+                            t_since_start = time.time() - eval_t_start
+                            if t_since_start > max_duration:
+                                print("Max Duration reached.")
                                 stop_episode = True
+                            if stop_episode:
+                                env.end_episode()
+                                break
 
-                        t_since_start = time.time() - eval_t_start
-                        if t_since_start > max_duration:
-                            print("Max Duration reached.")
-                            stop_episode = True
-                        if stop_episode:
-                            env.end_episode()
-                            break
-
-                        # wait for execution
-                        precise_wait(t_cycle_end - frame_latency)
-                        iter_idx += steps_per_inference
+                            # wait for execution
+                            precise_wait(t_cycle_end - frame_latency)
+                            iter_idx += steps_per_inference
 
                 except KeyboardInterrupt:
                     print("Interrupted!")

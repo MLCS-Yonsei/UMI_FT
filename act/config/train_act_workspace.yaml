@@ -19,6 +19,7 @@ action_dim: 10
 chunk_size: 100
 num_episodes: 205
 camera_names : ["top"]
+max_ep_length: 1800 # hardcoded
 
 
 policy:
@@ -83,12 +84,12 @@ training:
   seed: 42
   debug: False
   resume: False
-  num_epochs: 1 # 16000
+  num_epochs: 16000
   batch_size: 64
   eval: false
   # training loop control
   # in epochs
-  checkpoint_every: 200
+  checkpoint_every: 1000
   # misc
   tqdm_interval_sec: 1.0
 

@@ -15,7 +15,7 @@ from act.codecs.imagecodecs_numcodecs import register_codecs
 from act.dataset.base_dataset import BaseDataset
 from act.common.normalize_util import (
     array_to_stats, concatenate_normalizer, get_identity_normalizer_from_stat,
-    get_image_identity_normalizer, get_range_normalizer_from_stat)
+    get_image_identity_normalizer, get_range_normalizer_from_stat, get_gaussian_normalizer_from_stat)
 from act.common.pose_repr_util import convert_pose_mat_rep
 from act.common.pytorch_util import dict_apply
 from act.common.replay_buffer import ReplayBuffer
@@ -245,29 +245,33 @@ class ACTDataset(BaseDataset):
         for i in range(self.num_robot):
             # Assume the first 3 dims correspond to position.
             pos_stats = array_to_stats(action_data[..., i * dim_a : i * dim_a + 3])
-            action_normalizers.append(get_range_normalizer_from_stat(pos_stats))
+            # action_normalizers.append(get_range_normalizer_from_stat(pos_stats))
+            action_normalizers.append(get_gaussian_normalizer_from_stat(pos_stats))
             # Assume the next dims (from 3 to dim_a-1) correspond to rotation.
             rot_stats = array_to_stats(action_data[..., i * dim_a + 3 : (i + 1) * dim_a - 1])
             action_normalizers.append(get_identity_normalizer_from_stat(rot_stats))
             # Assume the last dimension corresponds to the gripper.
             grip_stats = array_to_stats(action_data[..., (i + 1) * dim_a - 1 : (i + 1) * dim_a])
-            action_normalizers.append(get_range_normalizer_from_stat(grip_stats))
+            # action_normalizers.append(get_range_normalizer_from_stat(grip_stats))
+            action_normalizers.append(get_gaussian_normalizer_from_stat(grip_stats))
         normalizer['action'] = concatenate_normalizer(action_normalizers)
         
         for key in self.lowdim_keys:
             stats = array_to_stats(data_cache[key])
             # Choose the normalization function based on key name.
             if key.endswith('pos') or ('pos_wrt' in key) or key.endswith('pos_abs'):
-                norm_fn = get_range_normalizer_from_stat(stats)
+                # norm_fn = get_range_normalizer_from_stat(stats)
+                norm_fn = get_gaussian_normalizer_from_stat(stats)
                 normalizer['eef_pos'] = norm_fn
             elif key.endswith('rot') or key.endswith('rot_axis_angle'):
                 norm_fn = get_identity_normalizer_from_stat(stats)
                 normalizer['eef_rot'] = norm_fn
             elif key.endswith('gripper_width'):
-                norm_fn = get_range_normalizer_from_stat(stats)
+                # norm_fn = get_range_normalizer_from_stat(stats)
+                norm_fn = get_gaussian_normalizer_from_stat(stats)
                 normalizer['gripper_width'] = norm_fn
             elif key.endswith('start'):
-                norm_fn = get_range_normalizer_from_stat(stats)
+                norm_fn = get_identity_normalizer_from_stat(stats)
                 normalizer['eef_rot_start'] = norm_fn
             elif key.endswith('force'):
                 norm_fn = get_range_normalizer_from_stat(stats)

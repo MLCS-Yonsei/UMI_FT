@@ -4,6 +4,25 @@ import numpy as np
 import torch
 
 
+def get_gaussian_normalizer_from_stat(stat, range_eps=1e-7, fit_offset=True):
+    # Compute mean and std from stat; clip std to avoid division by zero
+    input_mean = stat['mean']
+    input_std = stat['std']
+    # Ensure std is not too small
+    input_std = np.maximum(input_std, range_eps)
+    scale = 1.0 / input_std
+    if fit_offset:
+        offset = - input_mean / input_std
+    else:
+        offset = np.zeros_like(input_mean)
+    
+    return SingleFieldLinearNormalizer.create_manual(
+        scale=scale,
+        offset=offset,
+        input_stats_dict=stat
+    )
+
+
 def get_range_normalizer_from_stat(stat, output_max=1, output_min=-1, range_eps=1e-7):
     # -1, 1 normalization
     input_max = stat['max']

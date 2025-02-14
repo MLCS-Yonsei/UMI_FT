@@ -68,7 +68,7 @@ def get_real_act_obs_dict(
         ) -> Dict[str, np.ndarray]:
     
     obs_dict_np = dict()
-    
+
     # process non-pose
     obs_shape_meta = shape_meta['obs']
     robot_prefix_map = collections.defaultdict(list)
@@ -170,7 +170,25 @@ def get_real_act_obs_dict(
             # obs_dict_np[f'robot{robot_id}_eef_pos_wrt_start'] = rel_obs_pose[:,:3]
             obs_dict_np[f'robot{robot_id}_eef_rot_axis_angle_wrt_start'] = rel_obs_pose[:,3:]
 
-    return obs_dict_np
+    # Chage obs dict for ACT
+    act_obs_dict = {}
+    for key in obs_dict_np.keys():
+        if key.endswith('pos'):
+            act_obs_dict['eef_pos'] = obs_dict_np[key]
+        elif key.endswith('angle'):
+            act_obs_dict['eef_rot'] = obs_dict_np[key]
+        elif key.endswith('start'):
+            act_obs_dict['eef_rot_start'] = obs_dict_np[key]
+        elif key.endswith('width'):
+            act_obs_dict['gripper_width'] = obs_dict_np[key]
+        elif key.endswith('force'):
+            act_obs_dict['force'] = obs_dict_np[key]
+        elif key.endswith('torque'):
+            act_obs_dict['torque'] = obs_dict_np[key]
+        else:
+            pass
+
+    return act_obs_dict
 
 def get_real_umi_obs_dict(
         env_obs: Dict[str, np.ndarray], 
