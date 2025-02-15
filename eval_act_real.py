@@ -26,6 +26,7 @@ import pathlib
 import time
 from multiprocessing.managers import SharedMemoryManager
 
+import zarr
 import av
 import click
 import cv2
@@ -60,6 +61,7 @@ from umi.real_world.real_inference_util import (get_real_obs_dict,
                                                 get_real_act_obs_dict,
                                                 get_real_umi_action)
 from umi.common.pose_util import pose_to_mat, mat_to_pose
+from umi.common.interpolation_util import get_interp1d, PoseInterpolator
 
 import pickle
 
@@ -144,13 +146,15 @@ def post_process(action_normalizer, raw_action):
 @click.option('-sf', '--sim_fov', type=float, default=None)
 @click.option('-ci', '--camera_intrinsics', type=str, default=None)
 @click.option('--mirror_swap', is_flag=True, default=False)
+@click.option('-z', '--zarr_path', default=None, help='Path to dataset zarr')
+@click.option('-r', '--replay', is_flag=True, default=False, help='Enable replay mode using stored replay buffer.')
 def main(input, output, robot_config, 
     match_dataset, match_episode, match_camera,
     camera_reorder,
     vis_camera_idx, init_joints, 
     steps_per_inference, max_duration,
     frequency, command_latency, 
-    no_mirror, sim_fov, camera_intrinsics, mirror_swap):
+    no_mirror, sim_fov, camera_intrinsics, mirror_swap, zarr_path, replay):
     
     max_gripper_width = 1 # used for clipping gripper width, in our case it will be max position
     min_gripper_width = 0
@@ -253,7 +257,36 @@ def main(input, output, robot_config,
                                 break
 
                         episode_first_frame_map[episode_idx] = img
-            print(f"Loaded initial frame for {len(episode_first_frame_map)} episodes")
+                print(f"Loaded initial frame for {len(episode_first_frame_map)} episodes")
+            
+            # Load replay buffer for replay
+            if replay:
+                if zarr_path is None:
+                    print("Please provide a valid zarr_path for replay mode.")
+                    return
+
+                zip_store = zarr.ZipStore(zarr_path, mode='a')
+                root = zarr.group(zip_store)
+                replay_buffer = ReplayBuffer.create_from_group(root)
+
+                num_episodes = len(replay_buffer.episode_ends)
+                print(f"Loaded replay buffer with {num_episodes} episodes.")
+
+                episode_idx = np.random.choice(num_episodes)
+                print(f"Replaying episode {episode_idx}...")
+
+                pose_data = dict()
+                for robot_idx in range(1):
+                    pos = ep[f'robot{robot_idx}_eef_pos'][:]
+                    rot = ep[f'robot{robot_idx}_eef_rot_axis_angle'][:]
+                    grip = ep[f'robot{robot_idx}_gripper_width'][:]
+                    pose = np.concatenate([pos, rot], axis=-1)
+                    tx_tag_tcp = pose_to_mat(pose)
+                    tx_tag_robot = tx_left_right
+                    tx_robot_tcp = np.linalg.inv(tx_tag_robot) @ tx_tag_tcp
+                    tcp_pose = mat_to_pose(tx_robot_tcp)
+                    pose_data[f'robot{robot_idx}_tcp_pose'] = tcp_pose
+
 
             # creating model
             # have to be done after fork to prevent 
@@ -421,6 +454,24 @@ def main(input, output, robot_config,
                                 target_pose[robot_idx] = pose
                                 gripper_target_pos[robot_idx] = grip
                             time.sleep(duration)
+                        
+                        elif key_stroke == KeyCode(char='r'):
+                            #  I think this is wrong
+                            # we have to change raw pose to robotic pose
+                            assert replay == True
+                            duration = 3.0
+                            s = replay_buffer.get_episode_slice(episode_idx)
+
+                            for robot_idx in range(1):
+                                pose = pose_data[f'robot{robot_idx}_tcp_pose'][s.start]
+                                grip = ep[f'robot{robot_idx}_gripper_width'][s.start]
+                                env.robots[robot_idx].servoL(pose, duration=duration)
+                                env.grippers[robot_idx].schedule_waypoint(grip, target_time=time.time() + duration)
+                                target_pose[robot_idx] = pose
+                                gripper_target_pos[robot_idx] = grip
+                            start_t = time.time()
+                            episode_data = replay_buffer.get_episode(episode_idx)
+                            time.sleep(max(duration - (time.time() - start_t), 0))
 
                         elif key_stroke == Key.backspace:
                             if click.confirm('Are you sure to drop an episode?'):
@@ -465,13 +516,104 @@ def main(input, output, robot_config,
 
 
                     # execute teleop command
-                    # env.exec_actions(
-                    #     actions=[action], 
-                    #     timestamps=[t_command_target-time.monotonic()+time.time()],
-                    #     compensate_latency=False)
+                    env.exec_actions(
+                        actions=[action], 
+                        timestamps=[t_command_target-time.monotonic()+time.time()],
+                        compensate_latency=False)
                     precise_wait(t_cycle_end)
                     iter_idx += 1
                 
+                # ========== replay buffer control loop ==============
+                if replay:
+                    try:
+                        episode_data = replay_buffer.get_episode(episode_idx)
+                        s = replay_buffer.get_episode_slice(episode_idx)
+                        # pre-compute interpolation
+                        data_frequency = 59.94
+                        slowdown = 2.0
+                        n_data_samples = len(pose_data['robot0_tcp_pose'][s])
+                        data_timestamps = np.arange(n_data_samples).astype(np.float32) / data_frequency
+                        exec_timestamps = np.arange(int(np.floor(data_timestamps[-1] * frequency * slowdown))) / frequency / slowdown
+                        exec_data_idxs = np.round(np.clip(exec_timestamps, 0, data_timestamps[-1]) * data_frequency).astype(np.int32)
+
+                        actions = np.zeros((len(exec_timestamps), 14))
+                        for robot_idx in range(2):
+                            data_pose = pose_data[f'robot{robot_idx}_tcp_pose'][s]
+                            data_pose_interpolator = PoseInterpolator(data_timestamps, data_pose)
+                            data_gripper_interpolator = get_interp1d(data_timestamps, episode_data[f'robot{robot_idx}_gripper_width'])
+                            exec_pose = data_pose_interpolator(exec_timestamps)
+                            exec_grip = data_gripper_interpolator(exec_timestamps)
+
+                            for i in range(len(exec_pose)):
+                                solve_table_collision(
+                                    ee_pose=exec_pose[i],
+                                    gripper_width=exec_grip[i,0],
+                                    height_threshold=robots_config[robot_idx]['height_threshold'])
+
+                            actions[:,robot_idx*7:robot_idx*7+6] = exec_pose
+                            actions[:,robot_idx*7+6:robot_idx*7+7] = exec_grip
+
+                        # start episode
+                        start_delay = 1.0 
+                        eval_t_start = time.time() + start_delay
+                        t_start = time.monotonic() + start_delay
+                        env.start_episode(eval_t_start)
+                        # wait for 1/30 sec to get the closest frame actually
+                        # reduces overall latency
+                        frame_latency = 1/60
+                        precise_wait(eval_t_start - frame_latency, time_func=time.time)
+                        print("Started!")
+
+                        for iter_idx, _ in enumerate(exec_timestamps):
+                            t = iter_idx / frequency
+                            t_cycle_start = t_start + t
+                            t_cycle_end = t_cycle_start + 1/frequency
+
+                            # pump obs
+                            obs = env.get_obs()
+
+                            action = actions[iter_idx]
+
+                            env.exec_actions(
+                                actions=[action], 
+                                timestamps=[t_cycle_end-time.monotonic()+time.time()])
+
+                            # plot image overlay
+                            data_idx = exec_data_idxs[iter_idx]
+                            vis_imgs = list()
+                            for camera_idx in range(2):
+                                img = episode_data[f'camera{camera_idx}_rgb'][data_idx]
+                                vis_img = obs[f'camera{camera_idx}_rgb'][-1]
+                                match_img = img.astype(np.float32) / 255
+                                avg_img = (vis_img + match_img) / 2
+                                vis_img = np.concatenate([vis_img, avg_img, match_img], axis=1)
+                                vis_imgs.append(vis_img[...,::-1])
+                            vis_img = np.concatenate(vis_imgs, axis=0)
+                            cv2.imshow('default', vis_img)
+                            key_stroke = cv2.pollKey()
+
+                            press_events = key_counter.get_press_events()
+                            stop_episode = False
+                            for key_stroke in press_events:
+                                if key_stroke == KeyCode(char='s'):
+                                    # Stop episode
+                                    # Hand control back to human
+                                    print('Stopped.')
+                                    stop_episode = True
+                            if stop_episode:
+                                env.end_episode()
+                                break
+                            
+                            precise_wait(t_cycle_end)
+                        env.end_episode()
+
+                    except KeyboardInterrupt:
+                        print("Interrupted!")
+                        # stop robot.
+                        env.end_episode()
+
+                    print("Stopped.")
+
                 # ========== policy control loop ==============
                 try:
                     # start episode
