@@ -228,6 +228,7 @@ class RTDEInterpolationController(mp.Process):
         robot_ip = self.robot_ip
         rtde_c = RTDEControlInterface(hostname=robot_ip)
         rtde_r = RTDEReceiveInterface(hostname=robot_ip)
+        print("Robot loaded!")
 
         try:
             if self.verbose:
@@ -249,6 +250,7 @@ class RTDEInterpolationController(mp.Process):
             # main loop
             dt = 1. / self.frequency
             curr_pose = rtde_r.getActualTCPPose()
+            # print(f"current pose: {curr_pose}")
             # use monotonic time to make sure the control loop never go backward
             curr_t = time.monotonic()
             last_waypoint_time = curr_t
@@ -270,6 +272,7 @@ class RTDEInterpolationController(mp.Process):
                 # if diff > 0:
                 #     print('extrapolate', diff)
                 pose_command = pose_interp(t_now)
+                
                 vel = 0.5
                 acc = 0.5
                 assert rtde_c.servoL(pose_command, 
@@ -277,7 +280,6 @@ class RTDEInterpolationController(mp.Process):
                     dt, 
                     self.lookahead_time, 
                     self.gain)
-                
                 # update robot state
                 state = dict()
                 for key in self.receive_keys:
@@ -331,8 +333,10 @@ class RTDEInterpolationController(mp.Process):
                     elif cmd == Command.SCHEDULE_WAYPOINT.value:
                         target_pose = command['target_pose']
                         target_time = float(command['target_time'])
+
                         # translate global time to monotonic time
                         target_time = time.monotonic() - time.time() + target_time
+                        
                         curr_time = t_now + dt
                         pose_interp = pose_interp.schedule_waypoint(
                             pose=target_pose,

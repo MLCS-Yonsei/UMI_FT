@@ -1,0 +1,11 @@
+conda activate umi
+
+cd UMI_Ft
+
+sudo chmod -R 777 /dev/bus/usb
+
+python eval_real_noft.py --robot_config=example/eval_robots_config_ft.yaml -i /home/jaco/epoch=6000-train_loss=0.010.ckpt -o data/eval_peg_insertion/
+
+python eval_act_real.py --robot_config=example/eval_robots_config_ft.yaml -i /home/jaco/best_epoch=11963.ckpt -o data/eval_peg_insertion/ -n /home/jaco/normalizer.pkl
+
+python eval_act_real.py --robot_config=example/eval_robots_config_ft.yaml -i /home/jaco/best_epoch=11963.ckpt -o data/eval_peg_insertion/ -n /home/jaco/normalizer.pkl -z /home/jaco/dataset.zarr.zip -r True

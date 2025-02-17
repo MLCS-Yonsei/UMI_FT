@@ -47,7 +47,7 @@ from umi.common.cv_util import (
     FisheyeRectConverter
 )
 from diffusion_policy.common.pytorch_util import dict_apply
-from diffusion_policy.workspace.base_workspace import BaseWorkspace
+from act.workspace.base_workspace import BaseWorkspace
 from umi.common.precise_sleep import precise_wait
 
 from umi.real_world.act_env_noft import ACTNoFTEnv
@@ -122,9 +122,6 @@ def get_current_pose(obs, robots_config):
     return episode_start_pose
 
 def post_process(action_normalizer, raw_action):
-    # raw_pos = raw_action[..., :3]
-    # raw_rot = raw_action[..., 3:9]
-    # raw_width = raw_action[..., 9:]
     return action_normalizer.unnormalize(raw_action)
     
 
@@ -148,13 +145,14 @@ def post_process(action_normalizer, raw_action):
 @click.option('--mirror_swap', is_flag=True, default=False)
 @click.option('-z', '--zarr_path', default=None, help='Path to dataset zarr')
 @click.option('-r', '--replay', is_flag=True, default=False, help='Enable replay mode using stored replay buffer.')
+@click.option('-n', '--normalizer_path', required=True, type=str, help='Normalizer path for ACT')
 def main(input, output, robot_config, 
     match_dataset, match_episode, match_camera,
     camera_reorder,
     vis_camera_idx, init_joints, 
     steps_per_inference, max_duration,
     frequency, command_latency, 
-    no_mirror, sim_fov, camera_intrinsics, mirror_swap, zarr_path, replay):
+    no_mirror, sim_fov, camera_intrinsics, mirror_swap, zarr_path, replay, normalizer_path):
     
     max_gripper_width = 1 # used for clipping gripper width, in our case it will be max position
     min_gripper_width = 0
@@ -229,8 +227,8 @@ def main(input, output, robot_config,
                 mirror_swap=mirror_swap,
 
                 # action
-                max_pos_speed=2.0,
-                max_rot_speed=6.0,
+                max_pos_speed=0.25,
+                max_rot_speed=0.16,
                 shm_manager=shm_manager) as env:
             cv2.setNumThreads(2)
             print("Waiting for camera")
@@ -304,7 +302,7 @@ def main(input, output, robot_config,
             print('action_pose_repr', action_pose_repr)
 
             # load normalizer
-            normalizer_path = os.path.join(cfg.output_dir, 'normalizer.pkl')
+            # normalizer_path = os.path.join(cfg.output_dir, 'normalizer.pkl')
             normalizer = pickle.load(open(normalizer_path, 'rb'))
             action_normalizer = normalizer['action']
 
@@ -331,9 +329,11 @@ def main(input, output, robot_config,
                     tx_robot1_robot0=tx_robot1_robot0,
                     episode_start_pose=episode_start_pose)
                 
+                
                 # set device
                 obs_dict = dict_apply(obs_dict_np, 
                     lambda x: torch.from_numpy(x).unsqueeze(0).to(device))
+                
                 
 
                 # query policy
@@ -345,14 +345,15 @@ def main(input, output, robot_config,
                 raw_action = raw_action.squeeze(0).detach().to('cpu').numpy()
                 action = post_process(action_normalizer, raw_action)
 
-                # action = result['action_pred'][0].detach().to('cpu').numpy()
+                if isinstance(action, torch.Tensor):
+                    print("action is tensor")
+                    action = action.detach().cpu().numpy() 
 
                 assert action.shape[-1] == 10 * len(robots_config)
 
                 action = get_real_umi_action(action, obs, action_pose_repr)
 
                 assert action.shape[-1] == 7 * len(robots_config)
-                del result
 
             print('Ready!')
             while True:
@@ -516,10 +517,10 @@ def main(input, output, robot_config,
 
 
                     # execute teleop command
-                    env.exec_actions(
-                        actions=[action], 
-                        timestamps=[t_command_target-time.monotonic()+time.time()],
-                        compensate_latency=False)
+                    # env.exec_actions(
+                    #     actions=[action], 
+                    #     timestamps=[t_command_target-time.monotonic()+time.time()],
+                    #     compensate_latency=False)
                     precise_wait(t_cycle_end)
                     iter_idx += 1
                 
@@ -637,12 +638,22 @@ def main(input, output, robot_config,
                     iter_idx = 0
                     perv_target_pose = None
 
+
+                    # for plotting
+                    all_norm_actions = []
+                    all_unnorm_actions = []
+                    all_real_umi_actions = []
+                    all_target_poses = []
+
+                    t = 0
                     # ACT run during max timesteps
                     # while True:
                     for t in range(max_ep_length):
+                    # for t in range(100):
                         # calculate timing
                         t_cycle_end = t_start + (iter_idx + steps_per_inference) * dt
-
+                        # t_cycle_end = eval_t_start + (t + 1) * dt
+                        
                         # get obs
                         obs = env.get_obs()
                         obs_timestamps = obs['timestamp']
@@ -666,60 +677,80 @@ def main(input, output, robot_config,
                             # query policy
                             if t % query_frequency == 0:
                                 all_actions = policy(obs_dict)
+                                # print("all actions: ", all_actions)
 
                             raw_action = all_actions[:, t % query_frequency]
 
-                            raw_action = raw_action.squeeze(0).detach().to('cpu').numpy()
+                            # print("raw action: ", raw_action)
 
-                            action = post_process(action_normalizer, raw_action)
+                            raw_action = raw_action.squeeze(0).detach().to('cpu').numpy()
+                            all_norm_actions.append(raw_action)
+
+                            raw_action = post_process(action_normalizer, raw_action)
+                            # print("unnormalized action: ", action)
+                            all_unnorm_actions.append(raw_action)
+
+                            if isinstance(raw_action, torch.Tensor):
+                                raw_action = raw_action.detach().cpu().numpy() 
 
                             action = get_real_umi_action(raw_action, obs, action_pose_repr)
-
+                            all_real_umi_actions.append(action)
+                            # print("real umi action: ", action)
                             print('Inference latency:', time.time() - s)
-                        
-                            # convert policy action to env actions
-                            this_target_poses = action
 
+                            # make one timestep action to (num_robot, action_dim)
+                            this_target_poses = action.reshape(1, -1)
+                            # print(this_target_poses.shape) # (1, 7)
+                            # print(this_target_poses[:, 0:6].shape) # (1, 7)
+                            # print(this_target_poses[:, 6].shape) # (1, )
+                            # print(this_target_poses.reshape([len(robots_config), -1]).shape) # (1, 7)
+
+                            # assert this_target_poses.shape[1] == len(robots_config) * 7
+                            # for robot_idx in range(len(robots_config)):
+                            #     solve_table_collision(
+                            #         ee_pose=this_target_poses[robot_idx * 7: robot_idx * 7 + 6],
+                            #         gripper_width=this_target_poses[robot_idx * 7 + 6],
+                            #         height_threshold=robots_config[robot_idx]['height_threshold']
+                            #     )
+                            # # solve collison between two robots
+                            # solve_sphere_collision(
+                            #     ee_poses=this_target_poses.reshape([len(robots_config), -1]),
+                            #     robots_config=robots_config
+                            # )
+
+                            # deal with timing for single action <ACT>
                             assert this_target_poses.shape[1] == len(robots_config) * 7
-                            for target_pose in this_target_poses:
-                                for robot_idx in range(len(robots_config)):
-                                    solve_table_collision(
-                                        ee_pose=target_pose[robot_idx * 7: robot_idx * 7 + 6],
-                                        gripper_width=target_pose[robot_idx * 7 + 6],
-                                        height_threshold=robots_config[robot_idx]['height_threshold']
-                                    )
+                            # action_timestamps = np.array([obs_timestamps[-1] + dt])
+                            # action_timestamps = np.array([max(time.time() + dt, obs_timestamps[-1] + 2 * dt)])
+                            action_timestamps = np.array([time.time() + dt])
+                            at = time.time() + dt
+                            # print("action timestamp: {:.6f}".format(at))
 
-                                # solve collison between two robots
-                                solve_sphere_collision(
-                                    ee_poses=target_pose.reshape([len(robots_config), -1]),
-                                    robots_config=robots_config
-                                )
 
-                            # deal with timing
-                            # the same step actions are always the target for
-                            action_timestamps = (np.arange(len(action), dtype=np.float64)
-                                ) * dt + obs_timestamps[-1]
-                            print(dt)
+                            # print(dt)
                             action_exec_latency = 0.01
                             curr_time = time.time()
                             is_new = action_timestamps > (curr_time + action_exec_latency)
-                            if np.sum(is_new) == 0:
-                                # exceeded time budget, still do something
-                                this_target_poses = this_target_poses[[-1]]
-                                # schedule on next available step
+                            # print("is new: ", is_new)
+                            if not np.any(is_new):  # If no valid future actions
+                                this_target_poses = this_target_poses[[-1]]  # Use last pose
+
+                                # Schedule action at the next available step
                                 next_step_idx = int(np.ceil((curr_time - eval_t_start) / dt))
-                                action_timestamp = eval_t_start + (next_step_idx) * dt
+                                action_timestamp = eval_t_start + next_step_idx * dt
+                                
                                 print('Over budget', action_timestamp - curr_time)
                                 action_timestamps = np.array([action_timestamp])
                             else:
                                 this_target_poses = this_target_poses[is_new]
                                 action_timestamps = action_timestamps[is_new]
-
+                            all_target_poses.append(this_target_poses)
+                            print("execute action: ", this_target_poses)
                             # execute actions
-                            env.exec_actions(
-                                actions=this_target_poses,
-                                timestamps=action_timestamps,
-                                compensate_latency=True
+                            # env.exec_actions(
+
+                            env.exec_one_action(
+                                action=this_target_poses,
                             )
                             print(f"Submitted {len(this_target_poses)} steps of actions.")
 
@@ -757,12 +788,18 @@ def main(input, output, robot_config,
                                 print("Max Duration reached.")
                                 stop_episode = True
                             if stop_episode:
-                                env.end_episode()
+                                # env.end_episode()
                                 break
 
                             # wait for execution
                             precise_wait(t_cycle_end - frame_latency)
                             iter_idx += steps_per_inference
+                            # if t == max_ep_length:
+                            #     break
+                            # else:
+                            #     t +=1 
+
+                    pickle.dump([all_norm_actions, all_unnorm_actions, all_real_umi_actions, all_target_poses], open('/home/jaco/actions.pkl', 'wb'))
 
                 except KeyboardInterrupt:
                     print("Interrupted!")

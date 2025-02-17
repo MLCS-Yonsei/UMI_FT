@@ -174,21 +174,24 @@ def get_real_act_obs_dict(
     act_obs_dict = {}
     for key in obs_dict_np.keys():
         if key.endswith('pos'):
-            act_obs_dict['eef_pos'] = obs_dict_np[key]
+            act_obs_dict['eef_pos'] = obs_dict_np[key][0]
         elif key.endswith('angle'):
-            act_obs_dict['eef_rot'] = obs_dict_np[key]
+            act_obs_dict['eef_rot'] = obs_dict_np[key][0]
         elif key.endswith('start'):
-            act_obs_dict['eef_rot_start'] = obs_dict_np[key]
+            act_obs_dict['eef_rot_start'] = obs_dict_np[key][0]
         elif key.endswith('width'):
-            act_obs_dict['gripper_width'] = obs_dict_np[key]
+            act_obs_dict['gripper_width'] = obs_dict_np[key][0]
         elif key.endswith('force'):
-            act_obs_dict['force'] = obs_dict_np[key]
+            act_obs_dict['force'] = obs_dict_np[key][0]
         elif key.endswith('torque'):
-            act_obs_dict['torque'] = obs_dict_np[key]
+            act_obs_dict['torque'] = obs_dict_np[key][0]
+        elif key.endswith('rgb'):
+            act_obs_dict['images'] = obs_dict_np[key][0]
         else:
             pass
-
-    return act_obs_dict
+    
+    
+    return {'obs' :act_obs_dict}
 
 def get_real_umi_obs_dict(
         env_obs: Dict[str, np.ndarray], 

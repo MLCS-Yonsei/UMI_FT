@@ -54,6 +54,7 @@ class ACTNoFTEnv:
             camera_obs_horizon=2,
             robot_obs_horizon=2,
             gripper_obs_horizon=2,
+            sensor_obs_horizon=2,
 
             # plotter = None,
 
@@ -315,6 +316,7 @@ class ACTNoFTEnv:
         self.sensor_down_sample_steps = sensor_down_sample_steps
         self.camera_obs_horizon = camera_obs_horizon
         self.robot_obs_horizon = robot_obs_horizon
+        self.sensor_obs_horizon = sensor_obs_horizon
         self.gripper_obs_horizon = gripper_obs_horizon
         # recording
         self.output_dir = output_dir
@@ -426,7 +428,7 @@ class ACTNoFTEnv:
         # both have more than n_obs_steps data
         last_robots_data = list()
         last_grippers_data = list()
-        # last_sensors_data = list()
+        last_sensors_data = list()
         # 125/500 hz, robot_receive_timestamp
         for robot in self.robots:
             last_robots_data.append(robot.get_all_state())
@@ -434,8 +436,8 @@ class ACTNoFTEnv:
         for gripper in self.grippers:
             last_grippers_data.append(gripper.get_all_state())
         # 1000 hz, sensor_receive_timestamp
-        # for sensor in self.sensors:
-        #     last_sensors_data.append(sensor.get_all_state())
+        for sensor in self.sensors:
+            last_sensors_data.append(sensor.get_all_state())
 
 
         # select align_camera_idx
@@ -515,21 +517,21 @@ class ACTNoFTEnv:
             obs_data.update(gripper_obs)
         
         # align sensor obs
-        # sensor_obs_timestamps = last_timestamp - (
-        #     np.arange(self.sensor_obs_horizon)[::-1] * self.sensor_down_sample_steps * dt)
-        # for robot_idx, last_sensor_data in enumerate(last_sensors_data):
-        #     # align sensor obs
-        #     force_interpolator = get_interp1d(
-        #         t=last_sensor_data['ft_timestamp'],
-        #         x=last_sensor_data['force'])
-        #     torque_interpolator = get_interp1d(
-        #         t=last_sensor_data['ft_timestamp'],
-        #         x=last_sensor_data['torque'])
-        #     sensor_obs = {
-        #         f'robot{robot_idx}_force': force_interpolator(sensor_obs_timestamps),
-        #         f'robot{robot_idx}_torque': torque_interpolator(sensor_obs_timestamps),
-        #     }
-        #     obs_data.update(sensor_obs)
+        sensor_obs_timestamps = last_timestamp - (
+            np.arange(self.sensor_obs_horizon)[::-1] * self.sensor_down_sample_steps * dt)
+        for robot_idx, last_sensor_data in enumerate(last_sensors_data):
+            # align sensor obs
+            force_interpolator = get_interp1d(
+                t=last_sensor_data['ft_timestamp'],
+                x=last_sensor_data['force'])
+            torque_interpolator = get_interp1d(
+                t=last_sensor_data['ft_timestamp'],
+                x=last_sensor_data['torque'])
+            sensor_obs = {
+                f'robot{robot_idx}_force': force_interpolator(sensor_obs_timestamps),
+                f'robot{robot_idx}_torque': torque_interpolator(sensor_obs_timestamps),
+            }
+            obs_data.update(sensor_obs)
             
             # self.plotter.update(time = last_sensor_data['ft_timestamp'], force = last_sensor_data['force'], torque = last_sensor_data['torque'])
 
@@ -553,14 +555,14 @@ class ACTNoFTEnv:
                     timestamps=last_gripper_data['gripper_timestamp']
                 )
             
-            # for robot_idx, last_sensor_data in enumerate(last_sensors_data):
-            #     self.obs_accumulator.put(
-            #         data={
-            #             f'robot{robot_idx}_force' : last_sensor_data['force'],
-            #             f'robot{robot_idx}_torque' : last_sensor_data['torque'],
-            #         },
-            #         timestamps=last_sensor_data['ft_timestamp']
-            #     )
+            for robot_idx, last_sensor_data in enumerate(last_sensors_data):
+                self.obs_accumulator.put(
+                    data={
+                        f'robot{robot_idx}_force' : last_sensor_data['force'],
+                        f'robot{robot_idx}_torque' : last_sensor_data['torque'],
+                    },
+                    timestamps=last_sensor_data['ft_timestamp']
+                )
 
         return obs_data
     
@@ -595,7 +597,7 @@ class ACTNoFTEnv:
                     target_time=new_timestamps[i] - r_latency
                 )
                 # print("gripper actions: ", g_actions)
-                if g_actions >= 0.7:
+                if g_actions >= 0.6:
                     gripper.schedule_close(target_time=new_timestamps[i]- g_latency)
                 else:
                     gripper.schedule_open(target_time=new_timestamps[i] - g_latency)
@@ -652,6 +654,23 @@ class ACTNoFTEnv:
                 new_actions,
                 new_timestamps
             )
+
+    def exec_one_action(self, action):
+        assert self.is_ready
+        if not isinstance(action, np.ndarray):
+            action = np.array(action)
+        
+        for robot_idx, (robot, gripper, rc, gc) in enumerate(zip(self.robots, self.grippers, self.robots_config, self.grippers_config)):
+            r_action = action[0, 7 * robot_idx + 0: 7 * robot_idx + 6]
+            g_action = action[0, 7 * robot_idx + 6]
+            robot.servoL(
+                pose=r_action,
+                duration=1.0
+            )
+            if g_action >= 0.6:
+                gripper.close()
+            else:
+                gripper.open()
 
     def get_robot_state(self):
         return [robot.get_state() for robot in self.robots]

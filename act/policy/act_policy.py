@@ -111,7 +111,11 @@ class ACTPolicy(nn.Module):
         else:
             action = data['action']
             nactions = self.normalizer['action'].normalize(action)
-        is_pad = data['is_pad']
+        
+        if 'is_pad' not in data.keys():
+            is_pad = None
+        else:
+            is_pad = data['is_pad']
         
         # normalize input
         nobs = self.normalizer.normalize(obs_dict)
@@ -119,7 +123,6 @@ class ACTPolicy(nn.Module):
         # print("nobs: ", nobs)
         # nactions = self.normalizer['action'].normalize(action)
         # print("nactions: ", nactions)
-        batch_size = nactions.shape[0]
 
         # extract low dim nobs
         low_dim_keys = ['eef_pos', 'eef_rot', 'eef_rot_start', 'gripper_width']
