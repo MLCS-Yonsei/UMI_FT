@@ -99,15 +99,20 @@ def main(input, output, tcp_offset, tx_slam_tag,
     # tcp to camera transform
     # all unit in meters
     # y axis in camera frame
-    cam_to_center_height = 0.086 # constant for UMI
+    cam_to_center_height = 0.086 # constant for UMI # this is same with ours too
     # optical center to mounting screw, positive is when optical center is in front of the mount
     cam_to_mount_offset = 0.01465 # constant for GoPro Hero 9,10,11
     cam_to_tip_offset = cam_to_mount_offset + tcp_offset
+    # cam_to_tip_offset = tcp_offset - cam_to_mount_offset # I think we should change this.
+    # tcp_offset = 0.126 + 0.01465 # distance from gripper tip to mounting screw 
 
     pose_cam_tcp = np.array([0, cam_to_center_height, cam_to_tip_offset, 0,0,0])
     tx_cam_tcp = pose_to_mat(pose_cam_tcp)
         
     # SLAM map origin to table tag transform
+    # tx_tag_slam : transformation matrix from table tag frame to SLAM map frame
+    # tx_slam_tag : tx from SLAM map frame to table tage frame
+    # tx_tag_slam will be used in pose_interp_from_df function
     if tx_slam_tag is None:
         path = demos_dir.joinpath('mapping', 'tx_slam_tag.json')
         assert path.is_file()
@@ -614,7 +619,7 @@ def main(input, output, tcp_offset, tx_slam_tag,
                 continue
             
             # load camera pose
-            df.loc[df['is_lost'], 'q_w'] = 1 # force the quaternion to represent identity rotation
+            df.loc[df['is_lost'], 'q_w'] = 1
             cam_pos = df[['x', 'y', 'z']].to_numpy()
             cam_rot_quat_xyzw = df[['q_x', 'q_y', 'q_z', 'q_w']].to_numpy()
             cam_rot = Rotation.from_quat(cam_rot_quat_xyzw)
@@ -626,7 +631,17 @@ def main(input, output, tcp_offset, tx_slam_tag,
             tx_tag_cam = tx_tag_slam @ tx_slam_cam
 
             # TODO: handle optinal robot cal based filtering
+            '''
+                UR_IKfast
+                from ur_ikfast import ur_kinematics
+
+                ur3e_arm = ur_kinematics.URKinematics('ur3e')
+
+
+
+            '''
             is_step_valid = is_tracked.copy()
+
             
 
             # get gripper data

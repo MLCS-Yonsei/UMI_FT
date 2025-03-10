@@ -52,6 +52,7 @@ class ACTPolicy(nn.Module):
                  weight_decay,
                  lr_drop,
                  clip_max_norm,
+                 is_joint,
 
                 ):
         super().__init__()
@@ -85,6 +86,8 @@ class ACTPolicy(nn.Module):
 
         }
         model, optimizer = build_ACT_model_and_optimizer(policy_config)
+
+        self.is_joint = is_joint
 
         self.model = model # CVAE decoder
         self.optimizer = optimizer
@@ -125,12 +128,15 @@ class ACTPolicy(nn.Module):
         # print("nactions: ", nactions)
 
         # extract low dim nobs
-        low_dim_keys = ['eef_pos', 'eef_rot', 'eef_rot_start', 'gripper_width']
+        if not self.is_joint:
+            low_dim_keys = ['eef_pos', 'eef_rot', 'eef_rot_start', 'gripper_width']
+        else:
+            low_dim_keys = ['qpos', 'gripper_width']
         low_dim_data = torch.cat([nobs[key] for key in low_dim_keys if key in nobs], dim=-1)
 
-        # print("low dim data: ", low_dim_data.shape) # bs, 10 -> 16
+        # print("low dim data: ", low_dim_data.shape) # bs, 10 -> 16 or 7
         # print("image: ", images.shape) # bs, 1, 3, 224, 224
-        # print("actions: ", nactions.shape) # bs, ep max length, 10
+        # print("actions: ", nactions.shape) # bs, ep max length, 16 or 7
 
         if nactions is not None: # training time
             actions = nactions[:, :self.model.num_queries]
@@ -141,7 +147,7 @@ class ACTPolicy(nn.Module):
 
             # TODO : change model architecture for force and torque
             # a_hat, is_pad_hat, (mu, logvar) = self.model(low_dim_data, images, force_data, torque_data, env_state, actions, is_pad)
-            
+
             total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)
             loss_dict = dict()
             all_l1 = F.l1_loss(actions, a_hat, reduction='none')

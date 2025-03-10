@@ -46,6 +46,7 @@ class ACTDataset(BaseDataset):
         seed: int = 42,
         val_ratio: float = 0.0,
         max_duration: float = None,
+        is_joint: bool = False,
         ):
 
         self.dataset_path = dataset_path
@@ -79,15 +80,18 @@ class ACTDataset(BaseDataset):
         self.key_latency_steps = key_latency_steps
         self.key_down_sample_steps = key_down_sample_steps
 
-        
+        self.is_joint = is_joint
+
         # Define sampler
         sampler = ACTSampler(
             episode_indices=self.episode_indices,
             hdf5_path=hdf5_path,
             cam_names=camera_names,
+            is_joint = self.is_joint
         )
 
         self.sampler = sampler
+
 
 
     def __len__(self):
@@ -112,7 +116,10 @@ class ACTDataset(BaseDataset):
 
         # Convert UMI zarr data to hdf5
         print("Converting data...")
-        converter.convert_episodes()
+        if not self.is_joint:
+            converter.convert_episodes()
+        else:
+            converter.convert_episodes_joints()
         return converter
 
     def solve_key_attr(self, shape_meta):
@@ -203,91 +210,153 @@ class ACTDataset(BaseDataset):
         normalizer = LinearNormalizer()
 
         # enumerate the dataset and save low_dim data
-        data_cache = {key: list() for key in self.lowdim_keys + ['action']}
-        
-        for episode_id in self.episode_indices:
-            dataset_path = os.path.join(self.hdf5_path, f"ep_{episode_id}.hdf5")
-            with h5py.File(dataset_path, 'r') as root:
-                for key in self.lowdim_keys:
-                    if key.endswith('pos'):
-                        arr = root['/observations/eef_pos'][()]
-                    elif key.endswith('angle'):
-                        arr = root['/observations/eef_rot'][()]
-                    elif key.endswith('width'):
-                        arr = root[f'/observations/gripper_width'][()]
-                    elif key.endswith('start'):
-                        arr = root['/observations/eef_rot_start'][()]
-                    elif key.endswith('force'):
-                        arr = root['/observations/force'][()]
-                    elif key.endswith('torque'):
-                        arr = root['/observations/torque'][()]
-                    else:
-                        pass
-                    data_cache[key].append(arr)
-                
-                action_arr = root[f'/action'][()]
-                data_cache['action'].append(action_arr)
-        
-        for key in data_cache:
-            data_cache[key] = np.stack(data_cache[key], axis=0)
-            B, T = data_cache[key].shape[0], data_cache[key].shape[1]
-            if not self.temporally_independent_normalization:
-                data_cache[key] = data_cache[key].reshape(B * T, -1)
-            
+        if not self.is_joint:
+            data_cache = {key: list() for key in self.lowdim_keys + ['action']}
+            for episode_id in self.episode_indices:
+                dataset_path = os.path.join(self.hdf5_path, f"ep_{episode_id}.hdf5")
+                if not os.path.isfile(dataset_path):
+                    print(f"File {dataset_path} does not exist. Skipping episode {episode_id}.")
+                    continue
+                with h5py.File(dataset_path, 'r') as root:
+                    for key in self.lowdim_keys:
+                        if key.endswith('pos'):
+                            arr = root['/observations/eef_pos'][()]
+                        elif key.endswith('angle'):
+                            arr = root['/observations/eef_rot'][()]
+                        elif key.endswith('width'):
+                            arr = root[f'/observations/gripper_width'][()]
+                        elif key.endswith('start'):
+                            arr = root['/observations/eef_rot_start'][()]
+                        elif key.endswith('force'):
+                            arr = root['/observations/force'][()]
+                        elif key.endswith('torque'):
+                            arr = root['/observations/torque'][()]
+                        else:
+                            pass
+                        data_cache[key].append(arr)
 
-        action_data = data_cache['action']
-        action_dim = action_data.shape[-1]
-        if action_dim % self.num_robot != 0:
-            raise ValueError("Action dimension is not divisible by num_robot.")
-        dim_a = action_dim // self.num_robot
+                    action_arr = root[f'/action'][()]
+                    data_cache['action'].append(action_arr)
 
-        action_normalizers = []
-        for i in range(self.num_robot):
-            # Assume the first 3 dims correspond to position.
-            pos_stats = array_to_stats(action_data[..., i * dim_a : i * dim_a + 3])
-            # action_normalizers.append(get_range_normalizer_from_stat(pos_stats))
-            action_normalizers.append(get_gaussian_normalizer_from_stat(pos_stats))
-            # Assume the next dims (from 3 to dim_a-1) correspond to rotation.
-            rot_stats = array_to_stats(action_data[..., i * dim_a + 3 : (i + 1) * dim_a - 1])
-            action_normalizers.append(get_identity_normalizer_from_stat(rot_stats))
-            # Assume the last dimension corresponds to the gripper.
-            grip_stats = array_to_stats(action_data[..., (i + 1) * dim_a - 1 : (i + 1) * dim_a])
-            # action_normalizers.append(get_range_normalizer_from_stat(grip_stats))
-            action_normalizers.append(get_gaussian_normalizer_from_stat(grip_stats))
-        normalizer['action'] = concatenate_normalizer(action_normalizers)
-        
-        for key in self.lowdim_keys:
-            stats = array_to_stats(data_cache[key])
-            # Choose the normalization function based on key name.
-            if key.endswith('pos') or ('pos_wrt' in key) or key.endswith('pos_abs'):
-                # norm_fn = get_range_normalizer_from_stat(stats)
-                norm_fn = get_gaussian_normalizer_from_stat(stats)
-                normalizer['eef_pos'] = norm_fn
-            elif key.endswith('rot') or key.endswith('rot_axis_angle'):
-                norm_fn = get_identity_normalizer_from_stat(stats)
-                normalizer['eef_rot'] = norm_fn
-            elif key.endswith('gripper_width'):
-                # norm_fn = get_range_normalizer_from_stat(stats)
-                norm_fn = get_gaussian_normalizer_from_stat(stats)
-                normalizer['gripper_width'] = norm_fn
-            elif key.endswith('start'):
-                norm_fn = get_identity_normalizer_from_stat(stats)
-                normalizer['eef_rot_start'] = norm_fn
-            elif key.endswith('force'):
-                norm_fn = get_range_normalizer_from_stat(stats)
-                normalizer['force'] = norm_fn
-            elif key.endswith('torque'):
-                norm_fn = get_range_normalizer_from_stat(stats)
-                normalizer['torque'] = norm_fn
-            else:
-                pass
-                # raise RuntimeError(f"Unsupported low-dimensional key for normalization: {key}")
-        
-        for key in self.rgb_keys:
-            normalizer['images'] = get_image_identity_normalizer()
-        
-        return normalizer
+            for key in data_cache:
+                data_cache[key] = np.stack(data_cache[key], axis=0)
+                B, T = data_cache[key].shape[0], data_cache[key].shape[1]
+                if not self.temporally_independent_normalization:
+                    data_cache[key] = data_cache[key].reshape(B * T, -1)
 
+
+            action_data = data_cache['action']
+            action_dim = action_data.shape[-1]
+            if action_dim % self.num_robot != 0:
+                raise ValueError("Action dimension is not divisible by num_robot.")
+            dim_a = action_dim // self.num_robot
+
+            action_normalizers = []
+            for i in range(self.num_robot):
+                # Assume the first 3 dims correspond to position.
+                pos_stats = array_to_stats(action_data[..., i * dim_a : i * dim_a + 3])
+                # action_normalizers.append(get_range_normalizer_from_stat(pos_stats))
+                action_normalizers.append(get_gaussian_normalizer_from_stat(pos_stats))
+                # Assume the next dims (from 3 to dim_a-1) correspond to rotation.
+                rot_stats = array_to_stats(action_data[..., i * dim_a + 3 : (i + 1) * dim_a - 1])
+                action_normalizers.append(get_identity_normalizer_from_stat(rot_stats))
+                # Assume the last dimension corresponds to the gripper.
+                grip_stats = array_to_stats(action_data[..., (i + 1) * dim_a - 1 : (i + 1) * dim_a])
+                # action_normalizers.append(get_range_normalizer_from_stat(grip_stats))
+                action_normalizers.append(get_gaussian_normalizer_from_stat(grip_stats))
+            normalizer['action'] = concatenate_normalizer(action_normalizers)
+
+            for key in self.lowdim_keys:
+                stats = array_to_stats(data_cache[key])
+                # Choose the normalization function based on key name.
+                if key.endswith('pos') or ('pos_wrt' in key) or key.endswith('pos_abs'):
+                    # norm_fn = get_range_normalizer_from_stat(stats)
+                    norm_fn = get_gaussian_normalizer_from_stat(stats)
+                    normalizer['eef_pos'] = norm_fn
+                elif key.endswith('rot') or key.endswith('rot_axis_angle'):
+                    norm_fn = get_identity_normalizer_from_stat(stats)
+                    normalizer['eef_rot'] = norm_fn
+                elif key.endswith('gripper_width'):
+                    # norm_fn = get_range_normalizer_from_stat(stats)
+                    norm_fn = get_gaussian_normalizer_from_stat(stats)
+                    normalizer['gripper_width'] = norm_fn
+                elif key.endswith('start'):
+                    norm_fn = get_identity_normalizer_from_stat(stats)
+                    normalizer['eef_rot_start'] = norm_fn
+                elif key.endswith('force'):
+                    norm_fn = get_range_normalizer_from_stat(stats)
+                    normalizer['force'] = norm_fn
+                elif key.endswith('torque'):
+                    norm_fn = get_range_normalizer_from_stat(stats)
+                    normalizer['torque'] = norm_fn
+                else:
+                    pass
+                    # raise RuntimeError(f"Unsupported low-dimensional key for normalization: {key}")
+
+            for key in self.rgb_keys:
+                normalizer['images'] = get_image_identity_normalizer()
+
+            return normalizer
+        
+        else:
+            data_cache = {key: list() for key in ['width', 'action', 'qpos']}
+            for episode_id in self.episode_indices:
+                dataset_path = os.path.join(self.hdf5_path, f"j_ep_{episode_id}.hdf5")
+                if not os.path.isfile(dataset_path):
+                    print(f"File {dataset_path} does not exist. Skipping episode {episode_id}.")
+                    continue
+                with h5py.File(dataset_path, 'r') as root:
+                    for key in ['width', 'qpos']:
+                        if key.endswith('width'):
+                            arr = root[f'/observations/gripper_width'][()]
+                        elif key.endswith('qpos'):
+                            arr = root[f'/observations/qpos'][()]
+                        else:
+                            pass
+                        data_cache[key].append(arr)
+
+                    action_arr = root[f'/action'][()]
+                    data_cache['action'].append(action_arr)
+
+            for key in data_cache:
+                data_cache[key] = np.stack(data_cache[key], axis=0)
+                B, T = data_cache[key].shape[0], data_cache[key].shape[1]
+                if not self.temporally_independent_normalization:
+                    data_cache[key] = data_cache[key].reshape(B * T, -1)
+
+
+            action_data = data_cache['action']
+            action_dim = action_data.shape[-1] # 7 for joints
+            if action_dim % self.num_robot != 0:
+                raise ValueError("Action dimension is not divisible by num_robot.")
+            dim_a = action_dim // self.num_robot # 7
+
+            for i in range(self.num_robot):
+                # Assume 6 dof joints + gripper
+                # qpos_stats = array_to_stats(action_data[..., i * dim_a : (i+1) * dim_a -1])
+                qpos_stats = array_to_stats(action_data[..., i * dim_a : (i+1) * dim_a])
+                # action_normalizers.append(get_range_normalizer_from_stat(pos_stats))
+                normalizer['action'] = get_gaussian_normalizer_from_stat(qpos_stats)
+
+            for key in ['qpos', 'width']:
+                stats = array_to_stats(data_cache[key])
+                # Choose the normalization function based on key name.
+                if key.endswith('qpos'):
+                    # norm_fn = get_range_normalizer_from_stat(stats)
+                    norm_fn = get_gaussian_normalizer_from_stat(stats)
+                    normalizer['qpos'] = norm_fn
+                elif key.endswith('width'):
+                    # norm_fn = get_range_normalizer_from_stat(stats)
+                    norm_fn = get_gaussian_normalizer_from_stat(stats)
+                    normalizer['gripper_width'] = norm_fn
+                else:
+                    pass
+                    # raise RuntimeError(f"Unsupported low-dimensional key for normalization: {key}")
+
+            for key in self.rgb_keys:
+                normalizer['images'] = get_image_identity_normalizer()
+
+            return normalizer
 
 
         

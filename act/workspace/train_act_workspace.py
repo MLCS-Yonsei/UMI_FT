@@ -35,7 +35,8 @@ from act.dataset.act_dataset import ACTDataset
 from act.common.data_converter import ACTDataConverter
 
 import time
-
+import glob
+import re
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
@@ -240,18 +241,39 @@ class TrainACTWorkspace(BaseWorkspace):
         accelerator.end_training()
 
     def load_data(self):
+        # For joint only
+        directory = '/home/soochul/GoPro_20250304_hdf5'
+        pattern = os.path.join(directory, 'j_ep_*.hdf5')
+        existing_files = sorted(glob.glob(pattern))
+
+        episode_ids = []
+        for file in existing_files:
+            basename = os.path.basename(file)
+            match = re.match(r"j_ep_(\d+)\.hdf5", basename)
+            if match:
+                episode_ids.append(int(match.group(1)))
+
+        episode_ids = sorted(episode_ids)
+        num_episodes = len(existing_files)
+        print(f"Found {num_episodes} existing episodes.")
+
         train_ratio = 1 - self.cfg.task.dataset.val_ratio
-        shuffled_indices = np.random.permutation(self.num_episodes)
-        train_indices = shuffled_indices[:int(train_ratio * self.num_episodes)]
-        val_indices = shuffled_indices[int(train_ratio * self.num_episodes):]
+        shuffled_indices = np.random.permutation(num_episodes)
+
+        train_indices = shuffled_indices[:int(train_ratio * num_episodes)]
+        val_indices = shuffled_indices[int(train_ratio * num_episodes):]
+
+        train_episode_ids = [episode_ids[i] for i in train_indices]
+        val_episode_ids = [episode_ids[i] for i in val_indices]
         
         print("Loading Dataset")
 
         train_dataset : ACTDataset
-        train_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=train_indices, camera_names=self.cfg.camera_names)
-
+        # train_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=train_indices, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint)
+        train_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=train_episode_ids, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint)
         val_dataset : ACTDataset
-        val_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=val_indices, camera_names=self.cfg.camera_names)
+        # val_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=val_indices, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint)
+        val_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=val_episode_ids, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint)
 
         if not self.convert_data:
             train_dataset.convert_zarr_to_hdf5()

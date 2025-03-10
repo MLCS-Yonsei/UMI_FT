@@ -77,8 +77,8 @@ shape_meta: &shape_meta
     rotation_rep: rotation_6d
 
 task_name: &task_name act
-dataset_path: /home/soochul/GoPro_20250117/dataset.zarr.zip
-hdf5_path: /home/soochul/GoPro_hdf5_2/
+dataset_path: /home/soochul/GoPro_20250304/dataset.zarr.zip
+hdf5_path: /home/soochul/GoPro_20250304_hdf5/
 pose_repr: &pose_repr
   obs_pose_repr: relative # abs or rel
   action_pose_repr: relative # abs or rel or delta
@@ -100,3 +100,4 @@ dataset:
   seed: 42
   val_ratio: 0.2
   chunk_size: 50
+  is_joint: True

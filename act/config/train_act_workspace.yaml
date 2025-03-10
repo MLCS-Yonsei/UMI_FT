@@ -14,12 +14,13 @@ eval: false
 onscreen_render: false
 policy_class: "ACT"             
 temporal_agg: false
-state_dim: 16 # 10
-action_dim: 10
-chunk_size: 100
-num_episodes: 205
+state_dim: 7 # 16 # 7
+action_dim: 7 # 10 # 7 
+chunk_size: 50
+num_episodes: 42
 camera_names : ["top"]
 max_ep_length: 1800 # hardcoded
+is_joint: True
 
 
 policy:
@@ -54,6 +55,7 @@ policy:
   weight_decay: 0.0001 # optimizer
   lr_drop: 200
   clip_max_norm: 0.1
+  is_joint: ${is_joint}
 
 
 
@@ -84,12 +86,12 @@ training:
   seed: 42
   debug: False
   resume: False
-  num_epochs: 16000
+  num_epochs: 36000
   batch_size: 64
   eval: false
   # training loop control
   # in epochs
-  checkpoint_every: 1000
+  checkpoint_every: 6000
   # misc
   tqdm_interval_sec: 1.0
 

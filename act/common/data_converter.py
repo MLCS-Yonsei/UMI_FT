@@ -16,6 +16,8 @@ from act.common.pytorch_util import dict_apply
 from act.common.replay_buffer import ReplayBuffer
 from act.common.pose_util import pose_to_mat, mat_to_pose10d
 
+from ur_ikfast.ur_ikfast import ur_kinematics
+
 class ACTDataConverter:
     def __init__(self,
                  shape_meta: dict,
@@ -117,6 +119,9 @@ class ACTDataConverter:
         self.max_ep_length = max_ep_length
         self.camera_names = camera_names
         self.hdf5_path = hdf5_path
+
+        ur3_arm = ur_kinematics.URKinematics('ur3')
+        self.ur3_arm = ur3_arm
 
     def __len__(self):
         # length of all data
@@ -482,6 +487,213 @@ class ACTDataConverter:
 
                 for name, array in data_dict.items():
                     root[name][...] = array[0]
+    
+    def ur_ik(self, tx_tag_tcp):
+        tx_tag_base = np.array([
+        [
+          0.014500569635805594,
+          -0.9997530090623589,
+          -0.016842041176650398,
+          -0.044059934138102635
+        ],
+        [
+          0.9996692201244223,
+          0.014853059193052465,
+          -0.02099611793729384,
+          -0.4799630648844079
+        ],
+        [
+          0.02124108792096622,
+          -0.016532014498134257,
+          0.9996376887055468,
+          -0.02314005620630681
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+
+        ])
+
+        tx_base_tag = np.linalg.inv(tx_tag_base)
+
+        tx_base_tcp = tx_base_tag @ tx_tag_tcp
+
+        joint_trajectory = np.zeros((tx_tag_tcp.shape[0], 6))
+
+        for t, pose in enumerate(tx_base_tcp):
+            curr_pose = pose[:3, :4]
+            if t != 0:
+                result = self.ur3_arm.inverse(curr_pose, False, q_guess=joint_trajectory[t-1, :])
+            else:
+                result = self.ur3_arm.inverse(curr_pose, False)
+            
+            joint_trajectory[t, :] = result
+
+        return joint_trajectory
+
+    def postprocess_episodes_joints(self, data):
+        '''
+            data : dict
+            key : rgb, low dim, action
+
+        '''
+        obs_dict = dict()
+
+        for key in self.rgb_keys:
+            if not key in data:
+                continue
+
+            # move channel last to channel first
+            # T,H,W,C
+            # convert uint8 image to float32
+            obs_dict[key] = np.moveaxis(data[key], -1, 1).astype(np.float32) / 255.
+            # T,C,H,W
+            del data[key]
+
+        for key in self.sampler_lowdim_keys: 
+            obs_dict[key] = data[key].astype(np.float32)
+            del data[key]
+        
+        # convert pose to joint
+        for robot_id in range(self.num_robot):
+            pose_mat = pose_to_mat(np.concatenate([
+                obs_dict[f'robot{robot_id}_eef_pos'],
+                obs_dict[f'robot{robot_id}_eef_rot_axis_angle']
+            ], axis=-1))
+            obs_joints = self.ur_ik(pose_mat)
+
+            obs_dict[f'robot{robot_id}_joints'] = obs_joints
+
+        # convert action pose to joint
+        actions = list()
+        for robot_id in range(self.num_robot):
+            action_mat = pose_to_mat(data['action'][...,7 * robot_id: 7 * robot_id + 6]) # some data has no action at all
+            action_joints = self.ur_ik(action_mat)
+            action_gripper = data['action'][..., 7 * robot_id + 6: 7 * robot_id + 7]
+            actions.append(np.concatenate([action_joints, action_gripper], axis=-1))
+        
+        data['action'] = np.concatenate(actions, axis=-1)
+
+        return {'obs' : obs_dict, 'action': data['action']}
+
+    def convert_episodes_joints(self):
+        # processing data
+        print("Preprocessing...")
+        all_preprocessed_data = self.preprocess_episodes()
+        
+        # define shape of data
+        for key in self.shape_dict:
+            shape = self.shape_dict[key]
+            if key.endswith('rgb'):
+                image_shape = shape
+            elif key.endswith('pos'):
+                pos_shape = shape
+            elif key.endswith('angle'):
+                rot_shape = shape
+            elif key.endswith('width'):
+                width_shape = shape
+            elif key.endswith('start'):
+                start_shape = shape
+            elif key.endswith('force'):
+                force_shape = shape
+            elif key.endswith('torque'):
+                torque_shape = shape
+            elif key.endswith('action'):
+                action_shape = shape
+            else:
+                raise NotImplementedError
+
+        for ep_idx, episode_data in enumerate(all_preprocessed_data):
+            print(f"Postprocessing episode {ep_idx}/{len(self.ep_indices)} with joints.")
+            postprocessed_data = self.postprocess_episodes_joints(episode_data)
+            print(f"Converting episode {ep_idx}/{len(self.ep_indices)}.")
+            # define hdf5 save path
+            dataset_path = os.path.join(self.hdf5_path, f'j_ep_{ep_idx}.hdf5')
+
+            # check joint value none
+            action_joint = postprocessed_data['action']
+            if np.any(np.isnan(action_joint)):
+                print("action joint contains NaN")
+                continue
+
+            # skip saving if file alreay exists
+            if os.path.isfile(dataset_path):
+                print(f"Episode {ep_idx} already exists. Skipping...")
+                continue
+            
+            # define data dict
+            data_dict = {
+                '/observations/qpos': [],
+                '/observations/gripper_width': [],
+                '/observations/force': [],
+                '/observations/torque': [],
+                '/action': [] # qpos with gripepr
+            }
+
+            for cam_name in self.camera_names:
+                data_dict[f'/observations/images/{cam_name}'] = []
+
+            # unpack data and save to data dict
+            for k in postprocessed_data['obs'].keys():
+                if k.endswith('joints'):
+                    data_dict['/observations/qpos'].append(postprocessed_data['obs'][k])
+                elif k.endswith('width'):
+                    data_dict['/observations/gripper_width'].append(postprocessed_data['obs'][k])
+                elif k.endswith('force'):
+                    data_dict['/observations/force'].append(postprocessed_data['obs'][k])
+                elif k.endswith('torque'):
+                    data_dict['/observations/torque'].append(postprocessed_data['obs'][k])
+                elif k.endswith('rgb'):
+                    for cam_name in self.camera_names:
+                        # data_dict[f'/observations/images/{cam_name}'].append(postprocessed_data['obs'][k])
+                        data_dict[f'/observations/images/{cam_name}'].append((postprocessed_data['obs'][k]*255).astype(np.uint8))
+                else:
+                    pass
+            
+            data_dict['/action'].append(postprocessed_data['action'])
+
+            # pad data
+            for key, array in data_dict.items():
+                array = array[0]
+                current_length = array.shape[0]
+
+                if current_length < self.max_ep_length:
+                    pad_size = self.max_ep_length - current_length
+                    padding_shape = list(array.shape[1:])
+                    padding = np.zeros((pad_size, *padding_shape), dtype=array.dtype)
+                    array = np.concatenate([array, padding], axis=0)
+                
+                data_dict[key] = [array]
+            
+            # convert each ep to hdf5 and save
+            with h5py.File(dataset_path, 'w', rdcc_nbytes=1024**2*2) as root:
+                root.attrs['sim'] = False
+
+                # make group
+                obs_group = root.create_group('observations')
+                image_group = obs_group.create_group('images')
+
+                # create dataset case
+                for cam_name in self.camera_names:
+                    _ = image_group.create_dataset(cam_name, (self.max_ep_length, *image_shape), dtype='uint8',
+                                             chunks=(1, *image_shape), )
+                    # _ = image_group.create_dataset(cam_name, (self.max_ep_length, *image_shape), dtype='float32',
+                    #                          chunks=(1, *image_shape), )
+
+                _ = obs_group.create_dataset('qpos', (self.max_ep_length, 6)) # joint 6
+                _ = obs_group.create_dataset('force', (self.max_ep_length, *force_shape))
+                _ = obs_group.create_dataset('torque', (self.max_ep_length, *torque_shape))
+                _ = obs_group.create_dataset('gripper_width', (self.max_ep_length, *width_shape))
+                _ = root.create_dataset('action', (self.max_ep_length, 7)) # 7 : joint 6 + gripper width 1
+
+                for name, array in data_dict.items():
+                    root[name][...] = array[0]
+
+        
+        
 
     def calculate_idx(self, key, start_idx, end_idx, horizon, downsample_steps, latency_steps, obs_arr = None, type = 'obs',):
         index_set = set()
