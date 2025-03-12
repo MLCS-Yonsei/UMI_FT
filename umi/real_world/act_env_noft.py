@@ -22,7 +22,7 @@ from diffusion_policy.common.cv2_util import (
     get_image_transform, optimal_row_cols)
 from umi.common.usb_util import reset_all_elgato_devices, get_sorted_v4l_paths
 from umi.common.pose_util import pose_to_pos_rot
-from umi.common.interpolation_util import get_interp1d, PoseInterpolator
+from umi.common.interpolation_util import get_interp1d, PoseInterpolator, JointInterpolator
 
 
 class ACTNoFTEnv:
@@ -66,7 +66,9 @@ class ACTNoFTEnv:
             enable_multi_cam_vis=True,
             multi_cam_vis_resolution=(960, 960),
             # shared memory
-            shm_manager=None
+            shm_manager=None,
+            
+            is_joint = False
             ):
         output_dir = pathlib.Path(output_dir)
         assert output_dir.parent.is_dir()
@@ -221,7 +223,8 @@ class ACTNoFTEnv:
         grippers: List[GripperController] = list() 
         sensors: List[FTSensorController] = list()
 
-
+        self.is_joint = is_joint
+        
         for rc in robots_config:
             if rc['robot_type'].startswith('ur3'):
                 assert rc['robot_type'] in ['ur3', 'ur3e']
@@ -244,7 +247,8 @@ class ACTNoFTEnv:
                     soft_real_time=False,
                     verbose=False,
                     receive_keys=None,
-                    receive_latency=rc['robot_obs_latency']
+                    receive_latency=rc['robot_obs_latency'],
+                    is_joint = self.is_joint
                 )
             # elif rc['robot_type'].startswith('franka'):
             #     this_robot = FrankaInterpolationController(
@@ -493,9 +497,18 @@ class ACTNoFTEnv:
                 t=last_robot_data['robot_timestamp'], 
                 x=last_robot_data['ActualTCPPose'])
             robot_pose = robot_pose_interpolator(robot_obs_timestamps)
+
+            # add joint part
+            robot_q_interpolator = JointInterpolator(
+                t = last_robot_data['robot_timestamp'],
+                x = last_robot_data['ActualQ']
+            )
+            robot_q = robot_q_interpolator(robot_obs_timestamps)
+
             robot_obs = {
                 f'robot{robot_idx}_eef_pos': robot_pose[...,:3],
-                f'robot{robot_idx}_eef_rot_axis_angle': robot_pose[...,3:]
+                f'robot{robot_idx}_eef_rot_axis_angle': robot_pose[...,3:],
+                f'robot{robot_idx}_joint_pos' : robot_q[..., :]
             }
             # update obs_data
             obs_data.update(robot_obs)
@@ -594,7 +607,7 @@ class ACTNoFTEnv:
                 g_actions = new_actions[i, 7 * robot_idx + 6]
                 robot.schedule_waypoint(
                     pose=r_actions,
-                    target_time=new_timestamps[i] - r_latency
+                    target_time=new_timestamps[i] - r_latency,
                 )
                 # print("gripper actions: ", g_actions)
                 if g_actions >= 0.6:

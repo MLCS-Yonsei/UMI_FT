@@ -65,6 +65,7 @@ def get_real_act_obs_dict(
         obs_pose_repr: str='abs',
         tx_robot1_robot0: np.ndarray=None,
         episode_start_pose: List[np.ndarray]=None,
+        is_joint = False
         ) -> Dict[str, np.ndarray]:
     
     obs_dict_np = dict()
@@ -169,29 +170,44 @@ def get_real_act_obs_dict(
             rel_obs_pose = mat_to_pose10d(rel_obs_pose_mat)
             # obs_dict_np[f'robot{robot_id}_eef_pos_wrt_start'] = rel_obs_pose[:,:3]
             obs_dict_np[f'robot{robot_id}_eef_rot_axis_angle_wrt_start'] = rel_obs_pose[:,3:]
+    
+    # get joint value
+    for robot_idx in range(n_robots):
+        obs_dict_np[f'robot{robot_idx}_qpos'] = env_obs[f'robot{robot_idx}_joint_pos']
 
     # Chage obs dict for ACT
     act_obs_dict = {}
-    for key in obs_dict_np.keys():
-        if key.endswith('pos'):
-            act_obs_dict['eef_pos'] = obs_dict_np[key][0]
-        elif key.endswith('angle'):
-            act_obs_dict['eef_rot'] = obs_dict_np[key][0]
-        elif key.endswith('start'):
-            act_obs_dict['eef_rot_start'] = obs_dict_np[key][0]
-        elif key.endswith('width'):
-            act_obs_dict['gripper_width'] = obs_dict_np[key][0]
-        elif key.endswith('force'):
-            act_obs_dict['force'] = obs_dict_np[key][0]
-        elif key.endswith('torque'):
-            act_obs_dict['torque'] = obs_dict_np[key][0]
-        elif key.endswith('rgb'):
-            act_obs_dict['images'] = obs_dict_np[key][0]
-        else:
-            pass
+    if not is_joint:
+        for key in obs_dict_np.keys():
+            if key.endswith('pos'):
+                act_obs_dict['eef_pos'] = obs_dict_np[key][0]
+            elif key.endswith('angle'):
+                act_obs_dict['eef_rot'] = obs_dict_np[key][0]
+            elif key.endswith('start'):
+                act_obs_dict['eef_rot_start'] = obs_dict_np[key][0]
+            elif key.endswith('width'):
+                act_obs_dict['gripper_width'] = obs_dict_np[key][0]
+            elif key.endswith('force'):
+                act_obs_dict['force'] = obs_dict_np[key][0]
+            elif key.endswith('torque'):
+                act_obs_dict['torque'] = obs_dict_np[key][0]
+            elif key.endswith('rgb'):
+                act_obs_dict['images'] = obs_dict_np[key][0]
+            else:
+                pass
+    else:
+        for key in obs_dict_np.keys():
+            if key.endswith('width'):
+                act_obs_dict['gripper_width'] = obs_dict_np[key][0]
+            elif key.endswith('rgb'):
+                act_obs_dict['images'] = obs_dict_np[key][0]
+            elif key.endswith('qpos'):
+                act_obs_dict['qpos'] = obs_dict_np[key][0]
+            else:
+                pass
     
     
-    return {'obs' :act_obs_dict}
+    return {'obs' : act_obs_dict}
 
 def get_real_umi_obs_dict(
         env_obs: Dict[str, np.ndarray], 
@@ -307,34 +323,42 @@ def get_real_umi_obs_dict(
 def get_real_umi_action(
         action: np.ndarray,
         env_obs: Dict[str, np.ndarray], 
-        action_pose_repr: str='abs'
+        action_pose_repr: str='abs',
+        is_joint = False
     ):
 
     n_robots = int(action.shape[-1] // 10)
     env_action = list()
     for robot_idx in range(n_robots):
-        # convert pose to mat
-        pose_mat = pose_to_mat(np.concatenate([
-            env_obs[f'robot{robot_idx}_eef_pos'][-1],
-            env_obs[f'robot{robot_idx}_eef_rot_axis_angle'][-1]
-        ], axis=-1))
+        if not is_joint:
+            # convert pose to mat
+            pose_mat = pose_to_mat(np.concatenate([
+                env_obs[f'robot{robot_idx}_eef_pos'][-1],
+                env_obs[f'robot{robot_idx}_eef_rot_axis_angle'][-1]
+            ], axis=-1))
 
-        start = robot_idx * 10
-        action_pose10d = action[..., start:start+9]
-        action_grip = action[..., start+9:start+10]
-        action_pose_mat = pose10d_to_mat(action_pose10d)
+            start = robot_idx * 10
+            action_pose10d = action[..., start:start+9]
+            action_grip = action[..., start+9:start+10]
+            action_pose_mat = pose10d_to_mat(action_pose10d)
 
-        # solve relative action
-        action_mat = convert_pose_mat_rep(
-            action_pose_mat, 
-            base_pose_mat=pose_mat,
-            pose_rep=action_pose_repr,
-            backward=True)
+            # solve relative action
+            action_mat = convert_pose_mat_rep(
+                action_pose_mat, 
+                base_pose_mat=pose_mat,
+                pose_rep=action_pose_repr,
+                backward=True)
 
-        # convert action to pose
-        action_pose = mat_to_pose(action_mat)
-        env_action.append(action_pose)
-        env_action.append(action_grip)
+            # convert action to pose
+            action_pose = mat_to_pose(action_mat)
+            env_action.append(action_pose)
+            env_action.append(action_grip)
+        else:
+            start = robot_idx * 6
+            action_joint = action[..., start:start+6]
+            action_grip = action[..., start+6:start+7]
+            env_action.append(action_joint)
+            env_action.append(action_grip)
 
     env_action = np.concatenate(env_action, axis=-1)
     return env_action

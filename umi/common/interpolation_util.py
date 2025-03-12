@@ -49,3 +49,18 @@ def get_gripper_calibration_interpolator(
     gripper_actual_width = aruco_actual_width - aruco_min_width
     interp = get_interp1d(aruco_measured_width, gripper_actual_width)
     return interp
+
+class JointInterpolator:
+    def __init__(self, t, x):
+        q = x[:, ]
+        self.q_interp = get_interp1d(t, q)
+
+    @property
+    def x(self):
+        return self.q_interp.x
+    
+    def __call__(self, t):
+        min_t = self.q_interp.x[0]
+        max_t = self.q_interp.x[-1]
+        t = np.clip(t, min_t, max_t)
+        return self.q_interp(t)

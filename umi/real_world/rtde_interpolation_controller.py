@@ -12,12 +12,15 @@ from umi.shared_memory.shared_memory_queue import (
     SharedMemoryQueue, Empty)
 from umi.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
 from umi.common.pose_trajectory_interpolator import PoseTrajectoryInterpolator
+from umi.common.joint_trajectory_interpolator import JointTrajectoryInterpolator
+
 from diffusion_policy.common.precise_sleep import precise_wait
 
 class Command(enum.Enum):
     STOP = 0
     SERVOL = 1
     SCHEDULE_WAYPOINT = 2
+    SCHEDULE_Q = 3
 
 
 class RTDEInterpolationController(mp.Process):
@@ -45,7 +48,9 @@ class RTDEInterpolationController(mp.Process):
             verbose=False,
             receive_keys=None,
             get_max_k=None,
-            receive_latency=0.0
+            receive_latency=0.0,
+
+            is_joint = False
             ):
         """
         frequency: CB2=125, UR3e=500
@@ -143,6 +148,8 @@ class RTDEInterpolationController(mp.Process):
         self.input_queue = input_queue
         self.ring_buffer = ring_buffer
         self.receive_keys = receive_keys
+
+        self.is_joint = is_joint
     
     # ========= launch method ===========
     def start(self, wait=True):
@@ -199,12 +206,18 @@ class RTDEInterpolationController(mp.Process):
     def schedule_waypoint(self, pose, target_time):
         pose = np.array(pose)
         assert pose.shape == (6,)
-
-        message = {
-            'cmd': Command.SCHEDULE_WAYPOINT.value,
-            'target_pose': pose,
-            'target_time': target_time
-        }
+        if not self.is_joint:
+            message = {
+                'cmd': Command.SCHEDULE_WAYPOINT.value,
+                'target_pose': pose,
+                'target_time': target_time
+            }
+        else:
+            message = {
+                'cmd': Command.SCHEDULE_Q.value,
+                'target_q': pose, # q
+                'target_time': target_time
+            }
         self.input_queue.put(message)
 
     # ========= receive APIs =============
@@ -250,6 +263,7 @@ class RTDEInterpolationController(mp.Process):
             # main loop
             dt = 1. / self.frequency
             curr_pose = rtde_r.getActualTCPPose()
+            curr_joint = rtde_r.getActualQ()
             # print(f"current pose: {curr_pose}")
             # use monotonic time to make sure the control loop never go backward
             curr_t = time.monotonic()
@@ -257,6 +271,10 @@ class RTDEInterpolationController(mp.Process):
             pose_interp = PoseTrajectoryInterpolator(
                 times=[curr_t],
                 poses=[curr_pose]
+            )
+            q_interp = JointTrajectoryInterpolator(
+                times=[curr_t],
+                joints=[curr_joint]
             )
             
             t_start = time.monotonic()
@@ -271,15 +289,26 @@ class RTDEInterpolationController(mp.Process):
                 # diff = t_now - pose_interp.times[-1]
                 # if diff > 0:
                 #     print('extrapolate', diff)
-                pose_command = pose_interp(t_now)
-                
-                vel = 0.5
-                acc = 0.5
-                assert rtde_c.servoL(pose_command, 
+                if not self.is_joint:
+                    pose_command = pose_interp(t_now)
+                    vel = 0.5
+                    acc = 0.5
+                    assert rtde_c.servoL(pose_command, 
                     vel, acc, # dummy, not used by ur5
                     dt, 
                     self.lookahead_time, 
                     self.gain)
+                else:
+                    pose_command = q_interp(t_now)
+                    vel = 0.5
+                    acc = 0.5
+                    assert rtde_c.servoJ(pose_command, 
+                    vel, acc, # dummy, not used by ur5
+                    dt, 
+                    self.lookahead_time, 
+                    self.gain)
+                
+                
                 # update robot state
                 state = dict()
                 for key in self.receive_keys:
@@ -339,6 +368,23 @@ class RTDEInterpolationController(mp.Process):
                         
                         curr_time = t_now + dt
                         pose_interp = pose_interp.schedule_waypoint(
+                            pose=target_pose,
+                            time=target_time,
+                            max_pos_speed=self.max_pos_speed,
+                            max_rot_speed=self.max_rot_speed,
+                            curr_time=curr_time,
+                            last_waypoint_time=last_waypoint_time
+                        )
+                        last_waypoint_time = target_time
+                    elif cmd == Command.SCHEDULE_Q.value:
+                        target_q = command['target_q']
+                        target_time = float(command['target_time'])
+
+                        # translate global time to monotonic time
+                        target_time = time.monotonic() - time.time() + target_time
+                        
+                        curr_time = t_now + dt
+                        q_interp = q_interp.schedule_waypoint(
                             pose=target_pose,
                             time=target_time,
                             max_pos_speed=self.max_pos_speed,
