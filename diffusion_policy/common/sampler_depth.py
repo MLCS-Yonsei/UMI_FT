@@ -18,11 +18,12 @@ def get_val_mask(n_episodes, val_ratio, seed=0):
     return val_mask
 
 
-class SequenceSampler:
+class SequenceSamplerDepth:
     def __init__(self,
         shape_meta: dict,
         replay_buffer: ReplayBuffer,
         rgb_keys: list,
+        depth_keys: list,
         lowdim_keys: list,
         key_horizon: dict,
         key_latency_steps: dict,
@@ -33,12 +34,6 @@ class SequenceSampler:
         max_duration: Optional[float]=None
     ):
         episode_ends = replay_buffer.episode_ends[:] # it means all length of each episodes
-        # it has like this form
-        # [  1243   2943   4828   6559   8212  10048  10817  11683  12470  13263
-        #    14114  14985  15887  16774  17916  18903  19904  20960  21961  22943
-        #    23982  24948  25821  26676  27595  28541  29492  30423  31393  32352 ...
-        # [1st_ep_end_time 2nd_ep_end_time ...]
-        # 1st_ep_end_time = 2nd_ep_satrt_time
 
         # load gripper_width
         gripper_width = replay_buffer['robot0_gripper_width'][:, 0]
@@ -94,6 +89,8 @@ class SequenceSampler:
                 self.replay_buffer[key] = replay_buffer[key][:]
         for key in rgb_keys:
             self.replay_buffer[key] = replay_buffer[key]
+        for key in depth_keys:
+            self.replay_buffer[key] = replay_buffer[key]
         
         
         if 'action' in replay_buffer:
@@ -111,6 +108,7 @@ class SequenceSampler:
         self.action_padding = action_padding
         self.indices = indices
         self.rgb_keys = rgb_keys
+        self.depth_keys = depth_keys
         self.lowdim_keys = lowdim_keys
         self.key_horizon = key_horizon
         self.key_latency_steps = key_latency_steps
@@ -126,7 +124,7 @@ class SequenceSampler:
 
         result = dict()
 
-        obs_keys = self.rgb_keys + self.lowdim_keys
+        obs_keys = self.rgb_keys + self.depth_keys + self.lowdim_keys
         if self.ignore_rgb_is_applied:
             obs_keys = self.lowdim_keys
 
@@ -138,6 +136,18 @@ class SequenceSampler:
             this_downsample_steps = self.key_down_sample_steps[key]
             
             if key in self.rgb_keys:
+                assert this_latency_steps == 0
+                num_valid = min(this_horizon, (current_idx - start_idx) // this_downsample_steps + 1)
+                slice_start = current_idx - (num_valid - 1) * this_downsample_steps
+
+                output = input_arr[slice_start: current_idx + 1: this_downsample_steps]
+                assert output.shape[0] == num_valid
+                
+                # solve padding
+                if output.shape[0] < this_horizon:
+                    padding = np.repeat(output[:1], this_horizon - output.shape[0], axis=0)
+                    output = np.concatenate([padding, output], axis=0)
+            elif key in self.depth_keys:
                 assert this_latency_steps == 0
                 num_valid = min(this_horizon, (current_idx - start_idx) // this_downsample_steps + 1)
                 slice_start = current_idx - (num_valid - 1) * this_downsample_steps
@@ -188,7 +198,7 @@ class SequenceSampler:
                 for key in obs_keys:
                     result[key][:-1] = result[key][-1:]
 
-        # action
+        # aciton
         input_arr = self.replay_buffer['action']
         action_horizon = self.key_horizon['action']
         action_latency_steps = self.key_latency_steps['action']

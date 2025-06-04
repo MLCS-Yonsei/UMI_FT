@@ -1,4 +1,4 @@
-name: act
+name: umi
 
 camera_obs_latency: 0.125
 robot_obs_latency: 0.0001
@@ -7,14 +7,13 @@ ft_sensor_obs_latency: 0.0001
 dataset_frequeny: 0 #59.94
 obs_down_sample_steps: 3 # 3, 1
 
-low_dim_obs_horizon: 1
-img_obs_horizon: 1 # VTT expects a single image input
-action_horizon: 100
+low_dim_obs_horizon: 2
+img_obs_horizon: 2 # VTT expects a single image input
+action_horizon: 16
 ignore_proprioception: False
 
-
 shape_meta: &shape_meta
-  # acceptable types: rgb, low_dim
+  # acceptable types: rgb, depth, low_dim
   obs:
     camera0_rgb:
       shape: [3, 224, 224]
@@ -22,6 +21,13 @@ shape_meta: &shape_meta
       latency_steps: 0 # float
       down_sample_steps: ${task.obs_down_sample_steps} # int
       type: rgb
+      ignore_by_policy: False
+    camera0_depth:
+      shape: [3, 224, 224]
+      horizon: ${task.img_obs_horizon} # int
+      latency_steps: 0 # float
+      down_sample_steps: ${task.obs_down_sample_steps} # int
+      type: depth
       ignore_by_policy: False
     robot0_eef_pos:
       shape: [3]
@@ -55,20 +61,20 @@ shape_meta: &shape_meta
       type: low_dim
       ignore_by_policy: ${task.ignore_proprioception}
     # F/T sensor values
-    robot0_force:
-      shape: [3]  # Fx, Fy, Fz
-      horizon: ${task.low_dim_obs_horizon}  # int
-      latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.ft_sensor_obs_latency}) * ${task.dataset_frequeny}'}  # float
-      down_sample_steps: ${task.obs_down_sample_steps}  # float
-      type: low_dim
-      ignore_by_policy: ${task.ignore_proprioception}
-    robot0_torque:
-      shape: [3]  # Tx, Ty, Tz
-      horizon: ${task.low_dim_obs_horizon}  # int
-      latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.ft_sensor_obs_latency}) * ${task.dataset_frequeny}'}  # float
-      down_sample_steps: ${task.obs_down_sample_steps}  # float
-      type: low_dim
-      ignore_by_policy: ${task.ignore_proprioception}
+    # robot0_force:
+    #   shape: [3]  # Fx, Fy, Fz
+    #   horizon: ${task.low_dim_obs_horizon}  # int
+    #   latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.ft_sensor_obs_latency}) * ${task.dataset_frequeny}'}  # float
+    #   down_sample_steps: ${task.obs_down_sample_steps}  # float
+    #   type: low_dim
+    #   ignore_by_policy: ${task.ignore_proprioception}
+    # robot0_torque:
+    #   shape: [3]  # Tx, Ty, Tz
+    #   horizon: ${task.low_dim_obs_horizon}  # int
+    #   latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.ft_sensor_obs_latency}) * ${task.dataset_frequeny}'}  # float
+    #   down_sample_steps: ${task.obs_down_sample_steps}  # float
+    #   type: low_dim
+    #   ignore_by_policy: ${task.ignore_proprioception}
   action: 
     shape: [10]
     horizon: ${task.action_horizon}
@@ -76,9 +82,8 @@ shape_meta: &shape_meta
     down_sample_steps: ${task.obs_down_sample_steps} # int
     rotation_rep: rotation_6d
 
-task_name: &task_name act
-dataset_path: /home/soochul/GoPro_20250508/dataset.zarr.zip # GoPro_20250304/dataset.zarr.zip
-hdf5_path: /home/soochul/GoPro_20250508_hdf5/ # GoPro_20250304_hdf5/
+task_name: &task_name umi
+dataset_path: GoPro2/dataset.zarr.zip
 pose_repr: &pose_repr
   obs_pose_repr: relative # abs or rel
   action_pose_repr: relative # abs or rel or delta
@@ -87,10 +92,9 @@ env_runner:
   _target_: diffusion_policy.env_runner.real_pusht_image_runner.RealPushTImageRunner
 
 dataset:
-  _target_: act.dataset.act_dataset.ACTDataset
+  _target_: diffusion_policy.dataset.umi_dataset_depth.UmiDatasetDepth
   shape_meta: *shape_meta
   dataset_path: ${task.dataset_path}
-  hdf5_path: ${task.hdf5_path}
   cache_dir: null
   pose_repr: *pose_repr
   action_padding: False
@@ -98,7 +102,4 @@ dataset:
   repeat_frame_prob: 0.0
   max_duration: null
   seed: 42
-  val_ratio: 0.2
-  chunk_size: 50
-  is_joint: True
-
+  val_ratio: 0.05

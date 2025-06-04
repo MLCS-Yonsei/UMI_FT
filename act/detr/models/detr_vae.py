@@ -137,8 +137,8 @@ class DETRVAE(nn.Module):
             all_cam_features = []
             all_cam_pos = []
             for cam_id, cam_name in enumerate(self.camera_names):
-                features, pos = self.backbones[0](image) 
-                # features, pos = self.backbones[0](image[:, cam_id]) # HARDCODED # (bs, channels, H, W)
+                # features, pos = self.backbones[0](image) 
+                features, pos = self.backbones[0](image[:, cam_id]) # HARDCODED # (bs, channels, H, W)
                 features = features[0] # take the last layer feature 
                 pos = pos[0] # (bs, 512, 56, 56)
                 all_cam_features.append(self.input_proj(features)) # Conv2d (512, 512, kernel_size=(1, 1), stride=(1, 1))

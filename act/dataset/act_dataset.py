@@ -115,7 +115,7 @@ class ACTDataset(BaseDataset):
         )
 
         # Convert UMI zarr data to hdf5
-        print("Converting data...")
+        print(f"Converting data is joint : {self.is_joint}")
         if not self.is_joint:
             converter.convert_episodes()
         else:

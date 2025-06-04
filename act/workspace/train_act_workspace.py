@@ -82,7 +82,7 @@ class TrainACTWorkspace(BaseWorkspace):
         if not cfg.training.resume:
             self.exclude_keys = ['optimizer']
         
-        self.convert_data = True # False
+        self.convert_data = True #False
 
         
     def run(self):
@@ -242,20 +242,21 @@ class TrainACTWorkspace(BaseWorkspace):
 
     def load_data(self):
         # For joint only
-        directory = '/home/soochul/GoPro_20250304_hdf5'
-        pattern = os.path.join(directory, 'j_ep_*.hdf5')
-        existing_files = sorted(glob.glob(pattern))
+        # directory = '/home/soochul/GoPro_20250313_hdf5'
+        # pattern = os.path.join(directory, 'j_ep_*.hdf5')
+        # existing_files = sorted(glob.glob(pattern))
 
-        episode_ids = []
-        for file in existing_files:
-            basename = os.path.basename(file)
-            match = re.match(r"j_ep_(\d+)\.hdf5", basename)
-            if match:
-                episode_ids.append(int(match.group(1)))
+        # episode_ids = []
+        # for file in existing_files:
+        #     basename = os.path.basename(file)
+        #     match = re.match(r"j_ep_(\d+)\.hdf5", basename)
+        #     if match:
+        #         episode_ids.append(int(match.group(1)))
 
-        episode_ids = sorted(episode_ids)
-        num_episodes = len(existing_files)
-        print(f"Found {num_episodes} existing episodes.")
+        # episode_ids = sorted(episode_ids)
+        # num_episodes = len(existing_files)
+        num_episodes = self.cfg.num_episodes
+        # print(f"Found {num_episodes} existing episodes.")
 
         train_ratio = 1 - self.cfg.task.dataset.val_ratio
         shuffled_indices = np.random.permutation(num_episodes)
@@ -263,17 +264,17 @@ class TrainACTWorkspace(BaseWorkspace):
         train_indices = shuffled_indices[:int(train_ratio * num_episodes)]
         val_indices = shuffled_indices[int(train_ratio * num_episodes):]
 
-        train_episode_ids = [episode_ids[i] for i in train_indices]
-        val_episode_ids = [episode_ids[i] for i in val_indices]
+        # train_episode_ids = [episode_ids[i] for i in train_indices]
+        # val_episode_ids = [episode_ids[i] for i in val_indices]
         
         print("Loading Dataset")
 
         train_dataset : ACTDataset
-        # train_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=train_indices, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint)
-        train_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=train_episode_ids, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint)
+        train_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=train_indices, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint)
+        # train_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=train_episode_ids, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint)
         val_dataset : ACTDataset
-        # val_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=val_indices, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint)
-        val_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=val_episode_ids, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint)
+        val_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=val_indices, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint)
+        # val_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=val_episode_ids, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint)
 
         if not self.convert_data:
             train_dataset.convert_zarr_to_hdf5()

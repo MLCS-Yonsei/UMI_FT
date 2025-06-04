@@ -123,6 +123,12 @@ class ACTDataConverter:
         ur3_arm = ur_kinematics.URKinematics('ur3')
         self.ur3_arm = ur3_arm
 
+        self.num_ep_batch = 2
+        self.ep_batch_indices = list()
+        self.ep_batch_size = len(self.ep_indices) // 2
+        for ep_batch_idx in range(self.num_ep_batch):
+            self.ep_batch_indices.append( self.ep_indices[ ep_batch_idx * self.ep_batch_size : (ep_batch_idx+1) * self.ep_batch_size ] )
+
     def __len__(self):
         # length of all data
         return len(self.indices)
@@ -174,7 +180,7 @@ class ACTDataConverter:
         # dict_keys(['robot0_eef_pos', 'robot0_eef_rot_axis_angle', 'robot0_gripper_width', 'robot0_force', 'robot0_torque', 'robot0_demo_end_pose', 'robot0_demo_start_pose', 'camera0_rgb', 'action'])
 
 
-    def preprocess_episodes(self):
+    def preprocess_episodes(self, ep_batch_idx = 0):
         '''
             process list
             - latency
@@ -204,7 +210,8 @@ class ACTDataConverter:
         # if self.ignore_rgb_is_applied:
         #     obs_keys = self.sampler_lowdim_keys
         
-        for (ep_idx, start_idx, end_idx) in self.ep_indices:
+        # for (ep_idx, start_idx, end_idx) in self.ep_indices:
+        for (ep_idx, start_idx, end_idx) in self.ep_batch_indices[ep_batch_idx]:
             print(f"Pre-Processing episode {ep_idx}/{len(self.ep_indices)}.")
             episode_result = dict()
 
@@ -373,10 +380,6 @@ class ACTDataConverter:
         return {'obs' : obs_dict, 'action': data['action']}
 
     def convert_episodes(self):
-        # processing data
-        print("Preprocessing...")
-        all_preprocessed_data = self.preprocess_episodes()
-        
         # define shape of data
         for key in self.shape_dict:
             shape = self.shape_dict[key]
@@ -398,95 +401,190 @@ class ACTDataConverter:
                 action_shape = shape
             else:
                 raise NotImplementedError
+        
+        # processing data
+        print("Preprocessing...")
+        for ep_batch_idx in range(self.num_ep_batch):
+            all_preprocessed_data = self.preprocess_episodes(ep_batch_idx=ep_batch_idx)
 
-        for ep_idx, episode_data in enumerate(all_preprocessed_data):
-            print(f"Postprocessing episode {ep_idx}/{len(self.ep_indices)}.")
-            postprocessed_data = self.postprocess_episodes(episode_data)
+            for ep_idx, episode_data in enumerate(all_preprocessed_data):
+                print(f"Postprocessing episode {ep_idx}/{len(self.ep_indices)}.")
+                postprocessed_data = self.postprocess_episodes(episode_data)
 
-            print(f"Converting episode {ep_idx}/{len(self.ep_indices)}.")
-            # define hdf5 save path
-            dataset_path = os.path.join(self.hdf5_path, f'ep_{ep_idx}.hdf5')
+                print(f"Converting episode {ep_idx}/{len(self.ep_indices)}.")
+                # define hdf5 save path
+                dataset_path = os.path.join(self.hdf5_path, f'ep_{ep_idx + ep_batch_idx * self.ep_batch_size}.hdf5')
 
-            # skip saving if file alreay exists
-            if os.path.isfile(dataset_path):
-                print(f"Episode {ep_idx} already exists. Skipping...")
-                continue
-            
-            # define data dict
-            data_dict = {
-                '/observations/eef_pos': [],
-                '/observations/eef_rot': [],
-                '/observations/eef_rot_start': [],
-                '/observations/gripper_width': [],
-                '/observations/force': [],
-                '/observations/torque': [],
-                '/action': []
-            }
-
-            for cam_name in self.camera_names:
-                data_dict[f'/observations/images/{cam_name}'] = []
-
-            # unpack data and save to data dict
-            for k in postprocessed_data['obs'].keys():
-                if k.endswith('pos'):
-                    data_dict['/observations/eef_pos'].append(postprocessed_data['obs'][k])
-                elif k.endswith('angle'):
-                    data_dict['/observations/eef_rot'].append(postprocessed_data['obs'][k])
-                elif k.endswith('width'):
-                    data_dict['/observations/gripper_width'].append(postprocessed_data['obs'][k])
-                elif k.endswith('force'):
-                    data_dict['/observations/force'].append(postprocessed_data['obs'][k])
-                elif k.endswith('torque'):
-                    data_dict['/observations/torque'].append(postprocessed_data['obs'][k])
-                elif k.endswith('start'):
-                    data_dict['/observations/eef_rot_start'].append(postprocessed_data['obs'][k])
-                elif k.endswith('rgb'):
-                    for cam_name in self.camera_names:
-                        # data_dict[f'/observations/images/{cam_name}'].append(postprocessed_data['obs'][k])
-                        data_dict[f'/observations/images/{cam_name}'].append((postprocessed_data['obs'][k]*255).astype(np.uint8))
-                else:
-                    raise NotImplementedError
-            
-            data_dict['/action'].append(postprocessed_data['action'])
-
-            # pad data
-            for key, array in data_dict.items():
-                array = array[0]
-                current_length = array.shape[0]
-
-                if current_length < self.max_ep_length:
-                    pad_size = self.max_ep_length - current_length
-                    padding_shape = list(array.shape[1:])
-                    padding = np.zeros((pad_size, *padding_shape), dtype=array.dtype)
-                    array = np.concatenate([array, padding], axis=0)
+                # skip saving if file alreay exists
+                if os.path.isfile(dataset_path):
+                    print(f"Episode {ep_idx} already exists. Skipping...")
+                    continue
                 
-                data_dict[key] = [array]
-            
-            # convert each ep to hdf5 and save
-            with h5py.File(dataset_path, 'w', rdcc_nbytes=1024**2*2) as root:
-                root.attrs['sim'] = False
+                # define data dict
+                data_dict = {
+                    '/observations/eef_pos': [],
+                    '/observations/eef_rot': [],
+                    '/observations/eef_rot_start': [],
+                    '/observations/gripper_width': [],
+                    '/observations/force': [],
+                    '/observations/torque': [],
+                    '/action': []
+                }
 
-                # make group
-                obs_group = root.create_group('observations')
-                image_group = obs_group.create_group('images')
-
-                # create dataset case
                 for cam_name in self.camera_names:
-                    _ = image_group.create_dataset(cam_name, (self.max_ep_length, *image_shape), dtype='uint8',
-                                             chunks=(1, *image_shape), )
-                    # _ = image_group.create_dataset(cam_name, (self.max_ep_length, *image_shape), dtype='float32',
-                    #                          chunks=(1, *image_shape), )
+                    data_dict[f'/observations/images/{cam_name}'] = []
 
-                _ = obs_group.create_dataset('eef_pos', (self.max_ep_length, *pos_shape))
-                _ = obs_group.create_dataset('eef_rot', (self.max_ep_length, *rot_shape))
-                _ = obs_group.create_dataset('force', (self.max_ep_length, *force_shape))
-                _ = obs_group.create_dataset('torque', (self.max_ep_length, *torque_shape))
-                _ = obs_group.create_dataset('eef_rot_start', (self.max_ep_length, *start_shape))
-                _ = obs_group.create_dataset('gripper_width', (self.max_ep_length, *width_shape))
-                _ = root.create_dataset('action', (self.max_ep_length, *action_shape))
+                # unpack data and save to data dict
+                for k in postprocessed_data['obs'].keys():
+                    if k.endswith('pos'):
+                        data_dict['/observations/eef_pos'].append(postprocessed_data['obs'][k])
+                    elif k.endswith('angle'):
+                        data_dict['/observations/eef_rot'].append(postprocessed_data['obs'][k])
+                    elif k.endswith('width'):
+                        data_dict['/observations/gripper_width'].append(postprocessed_data['obs'][k])
+                    elif k.endswith('force'):
+                        data_dict['/observations/force'].append(postprocessed_data['obs'][k])
+                    elif k.endswith('torque'):
+                        data_dict['/observations/torque'].append(postprocessed_data['obs'][k])
+                    elif k.endswith('start'):
+                        data_dict['/observations/eef_rot_start'].append(postprocessed_data['obs'][k])
+                    elif k.endswith('rgb'):
+                        for cam_name in self.camera_names:
+                            # data_dict[f'/observations/images/{cam_name}'].append(postprocessed_data['obs'][k])
+                            data_dict[f'/observations/images/{cam_name}'].append((postprocessed_data['obs'][k]*255).astype(np.uint8))
+                    else:
+                        raise NotImplementedError
 
-                for name, array in data_dict.items():
-                    root[name][...] = array[0]
+                data_dict['/action'].append(postprocessed_data['action'])
+
+                # pad data
+                for key, array in data_dict.items():
+                    array = array[0]
+                    current_length = array.shape[0]
+
+                    if current_length < self.max_ep_length:
+                        pad_size = self.max_ep_length - current_length
+                        padding_shape = list(array.shape[1:])
+                        padding = np.zeros((pad_size, *padding_shape), dtype=array.dtype)
+                        array = np.concatenate([array, padding], axis=0)
+
+                    data_dict[key] = [array]
+
+                # convert each ep to hdf5 and save
+                with h5py.File(dataset_path, 'w', rdcc_nbytes=1024**2*2) as root:
+                    root.attrs['sim'] = False
+
+                    # make group
+                    obs_group = root.create_group('observations')
+                    image_group = obs_group.create_group('images')
+
+                    # create dataset case
+                    for cam_name in self.camera_names:
+                        _ = image_group.create_dataset(cam_name, (self.max_ep_length, *image_shape), dtype='uint8',
+                                                 chunks=(1, *image_shape), )
+                        # _ = image_group.create_dataset(cam_name, (self.max_ep_length, *image_shape), dtype='float32',
+                        #                          chunks=(1, *image_shape), )
+
+                    _ = obs_group.create_dataset('eef_pos', (self.max_ep_length, *pos_shape))
+                    _ = obs_group.create_dataset('eef_rot', (self.max_ep_length, *rot_shape))
+                    _ = obs_group.create_dataset('force', (self.max_ep_length, *force_shape))
+                    _ = obs_group.create_dataset('torque', (self.max_ep_length, *torque_shape))
+                    _ = obs_group.create_dataset('eef_rot_start', (self.max_ep_length, *start_shape))
+                    _ = obs_group.create_dataset('gripper_width', (self.max_ep_length, *width_shape))
+                    _ = root.create_dataset('action', (self.max_ep_length, *action_shape))
+
+                    for name, array in data_dict.items():
+                        root[name][...] = array[0]
+
+        # all_preprocessed_data = self.preprocess_episodes()
+        # for ep_idx, episode_data in enumerate(all_preprocessed_data):
+        #     print(f"Postprocessing episode {ep_idx}/{len(self.ep_indices)}.")
+        #     postprocessed_data = self.postprocess_episodes(episode_data)
+
+        #     print(f"Converting episode {ep_idx}/{len(self.ep_indices)}.")
+        #     # define hdf5 save path
+        #     dataset_path = os.path.join(self.hdf5_path, f'ep_{ep_idx}.hdf5')
+
+        #     # skip saving if file alreay exists
+        #     if os.path.isfile(dataset_path):
+        #         print(f"Episode {ep_idx} already exists. Skipping...")
+        #         continue
+            
+        #     # define data dict
+        #     data_dict = {
+        #         '/observations/eef_pos': [],
+        #         '/observations/eef_rot': [],
+        #         '/observations/eef_rot_start': [],
+        #         '/observations/gripper_width': [],
+        #         '/observations/force': [],
+        #         '/observations/torque': [],
+        #         '/action': []
+        #     }
+
+        #     for cam_name in self.camera_names:
+        #         data_dict[f'/observations/images/{cam_name}'] = []
+
+        #     # unpack data and save to data dict
+        #     for k in postprocessed_data['obs'].keys():
+        #         if k.endswith('pos'):
+        #             data_dict['/observations/eef_pos'].append(postprocessed_data['obs'][k])
+        #         elif k.endswith('angle'):
+        #             data_dict['/observations/eef_rot'].append(postprocessed_data['obs'][k])
+        #         elif k.endswith('width'):
+        #             data_dict['/observations/gripper_width'].append(postprocessed_data['obs'][k])
+        #         elif k.endswith('force'):
+        #             data_dict['/observations/force'].append(postprocessed_data['obs'][k])
+        #         elif k.endswith('torque'):
+        #             data_dict['/observations/torque'].append(postprocessed_data['obs'][k])
+        #         elif k.endswith('start'):
+        #             data_dict['/observations/eef_rot_start'].append(postprocessed_data['obs'][k])
+        #         elif k.endswith('rgb'):
+        #             for cam_name in self.camera_names:
+        #                 # data_dict[f'/observations/images/{cam_name}'].append(postprocessed_data['obs'][k])
+        #                 data_dict[f'/observations/images/{cam_name}'].append((postprocessed_data['obs'][k]*255).astype(np.uint8))
+        #         else:
+        #             raise NotImplementedError
+            
+        #     data_dict['/action'].append(postprocessed_data['action'])
+
+        #     # pad data
+        #     for key, array in data_dict.items():
+        #         array = array[0]
+        #         current_length = array.shape[0]
+
+        #         if current_length < self.max_ep_length:
+        #             pad_size = self.max_ep_length - current_length
+        #             padding_shape = list(array.shape[1:])
+        #             padding = np.zeros((pad_size, *padding_shape), dtype=array.dtype)
+        #             array = np.concatenate([array, padding], axis=0)
+                
+        #         data_dict[key] = [array]
+            
+        #     # convert each ep to hdf5 and save
+        #     with h5py.File(dataset_path, 'w', rdcc_nbytes=1024**2*2) as root:
+        #         root.attrs['sim'] = False
+
+        #         # make group
+        #         obs_group = root.create_group('observations')
+        #         image_group = obs_group.create_group('images')
+
+        #         # create dataset case
+        #         for cam_name in self.camera_names:
+        #             _ = image_group.create_dataset(cam_name, (self.max_ep_length, *image_shape), dtype='uint8',
+        #                                      chunks=(1, *image_shape), )
+        #             # _ = image_group.create_dataset(cam_name, (self.max_ep_length, *image_shape), dtype='float32',
+        #             #                          chunks=(1, *image_shape), )
+
+        #         _ = obs_group.create_dataset('eef_pos', (self.max_ep_length, *pos_shape))
+        #         _ = obs_group.create_dataset('eef_rot', (self.max_ep_length, *rot_shape))
+        #         _ = obs_group.create_dataset('force', (self.max_ep_length, *force_shape))
+        #         _ = obs_group.create_dataset('torque', (self.max_ep_length, *torque_shape))
+        #         _ = obs_group.create_dataset('eef_rot_start', (self.max_ep_length, *start_shape))
+        #         _ = obs_group.create_dataset('gripper_width', (self.max_ep_length, *width_shape))
+        #         _ = root.create_dataset('action', (self.max_ep_length, *action_shape))
+
+        #         for name, array in data_dict.items():
+        #             root[name][...] = array[0]
     
     def ur_ik(self, tx_tag_tcp):
         tx_tag_base = np.array([
@@ -570,8 +668,14 @@ class ACTDataConverter:
         # convert action pose to joint
         actions = list()
         for robot_id in range(self.num_robot):
-            action_mat = pose_to_mat(data['action'][...,7 * robot_id: 7 * robot_id + 6]) # some data has no action at all
-            action_joints = self.ur_ik(action_mat)
+            # action_mat = pose_to_mat(data['action'][...,7 * robot_id: 7 * robot_id + 6]) # some data has no action at all
+            # action_joints = self.ur_ik(action_mat)
+            pose_mat = pose_to_mat(np.concatenate([
+                obs_dict[f'robot{robot_id}_eef_pos'],
+                obs_dict[f'robot{robot_id}_eef_rot_axis_angle']
+            ], axis=-1))
+            obs_joints = self.ur_ik(pose_mat)
+            action_joints = obs_joints[:-1, :]
             action_gripper = data['action'][..., 7 * robot_id + 6: 7 * robot_id + 7]
             actions.append(np.concatenate([action_joints, action_gripper], axis=-1))
         
@@ -580,10 +684,6 @@ class ACTDataConverter:
         return {'obs' : obs_dict, 'action': data['action']}
 
     def convert_episodes_joints(self):
-        # processing data
-        print("Preprocessing...")
-        all_preprocessed_data = self.preprocess_episodes()
-        
         # define shape of data
         for key in self.shape_dict:
             shape = self.shape_dict[key]
@@ -605,92 +705,105 @@ class ACTDataConverter:
                 action_shape = shape
             else:
                 raise NotImplementedError
-
-        for ep_idx, episode_data in enumerate(all_preprocessed_data):
-            print(f"Postprocessing episode {ep_idx}/{len(self.ep_indices)} with joints.")
-            postprocessed_data = self.postprocess_episodes_joints(episode_data)
-            print(f"Converting episode {ep_idx}/{len(self.ep_indices)}.")
+            
+        # processing data
+        print("Preprocessing...")
+        # all_preprocessed_data = self.preprocess_episodes()
+        # for ep_idx, episode_data in enumerate(all_preprocessed_data):
+            # print(f"Postprocessing episode {ep_idx}/{len(self.ep_indices)} with joints.")
+            # postprocessed_data = self.postprocess_episodes_joints(episode_data)
+            # print(f"Converting episode {ep_idx}/{len(self.ep_indices)}.")
             # define hdf5 save path
-            dataset_path = os.path.join(self.hdf5_path, f'j_ep_{ep_idx}.hdf5')
+            # dataset_path = os.path.join(self.hdf5_path, f'j_ep_{ep_idx}.hdf5')
 
-            # check joint value none
-            action_joint = postprocessed_data['action']
-            if np.any(np.isnan(action_joint)):
-                print("action joint contains NaN")
-                continue
+        for ep_batch_idx in range(self.num_ep_batch):
+            all_preprocessed_data = self.preprocess_episodes(ep_batch_idx=ep_batch_idx)
 
-            # skip saving if file alreay exists
-            if os.path.isfile(dataset_path):
-                print(f"Episode {ep_idx} already exists. Skipping...")
-                continue
-            
-            # define data dict
-            data_dict = {
-                '/observations/qpos': [],
-                '/observations/gripper_width': [],
-                '/observations/force': [],
-                '/observations/torque': [],
-                '/action': [] # qpos with gripepr
-            }
+            for ep_idx, episode_data in enumerate(all_preprocessed_data):
+                print(f"Postprocessing episode {ep_idx}/{len(self.ep_indices)}.")
+                postprocessed_data = self.postprocess_episodes_joints(episode_data)
 
-            for cam_name in self.camera_names:
-                data_dict[f'/observations/images/{cam_name}'] = []
+                print(f"Converting episode {ep_idx}/{len(self.ep_indices)}.")
+                dataset_path = os.path.join(self.hdf5_path, f'j_ep_{ep_idx + ep_batch_idx * self.ep_batch_size}.hdf5')
+        
+                # check joint value none
+                action_joint = postprocessed_data['action']
+                if np.any(np.isnan(action_joint)):
+                    print("action joint contains NaN")
+                    continue
 
-            # unpack data and save to data dict
-            for k in postprocessed_data['obs'].keys():
-                if k.endswith('joints'):
-                    data_dict['/observations/qpos'].append(postprocessed_data['obs'][k])
-                elif k.endswith('width'):
-                    data_dict['/observations/gripper_width'].append(postprocessed_data['obs'][k])
-                elif k.endswith('force'):
-                    data_dict['/observations/force'].append(postprocessed_data['obs'][k])
-                elif k.endswith('torque'):
-                    data_dict['/observations/torque'].append(postprocessed_data['obs'][k])
-                elif k.endswith('rgb'):
-                    for cam_name in self.camera_names:
-                        # data_dict[f'/observations/images/{cam_name}'].append(postprocessed_data['obs'][k])
-                        data_dict[f'/observations/images/{cam_name}'].append((postprocessed_data['obs'][k]*255).astype(np.uint8))
-                else:
-                    pass
-            
-            data_dict['/action'].append(postprocessed_data['action'])
-
-            # pad data
-            for key, array in data_dict.items():
-                array = array[0]
-                current_length = array.shape[0]
-
-                if current_length < self.max_ep_length:
-                    pad_size = self.max_ep_length - current_length
-                    padding_shape = list(array.shape[1:])
-                    padding = np.zeros((pad_size, *padding_shape), dtype=array.dtype)
-                    array = np.concatenate([array, padding], axis=0)
+                # skip saving if file alreay exists
+                if os.path.isfile(dataset_path):
+                    print(f"Episode {ep_idx} already exists. Skipping...")
+                    continue
                 
-                data_dict[key] = [array]
-            
-            # convert each ep to hdf5 and save
-            with h5py.File(dataset_path, 'w', rdcc_nbytes=1024**2*2) as root:
-                root.attrs['sim'] = False
+                # define data dict
+                data_dict = {
+                    '/observations/qpos': [],
+                    '/observations/gripper_width': [],
+                    '/observations/force': [],
+                    '/observations/torque': [],
+                    '/action': [] # qpos with gripepr
+                }
 
-                # make group
-                obs_group = root.create_group('observations')
-                image_group = obs_group.create_group('images')
-
-                # create dataset case
                 for cam_name in self.camera_names:
-                    _ = image_group.create_dataset(cam_name, (self.max_ep_length, *image_shape), dtype='uint8',
-                                             chunks=(1, *image_shape), )
-                    # _ = image_group.create_dataset(cam_name, (self.max_ep_length, *image_shape), dtype='float32',
-                    #                          chunks=(1, *image_shape), )
+                    data_dict[f'/observations/images/{cam_name}'] = []
 
-                _ = obs_group.create_dataset('qpos', (self.max_ep_length, 6)) # joint 6
-                _ = obs_group.create_dataset('force', (self.max_ep_length, *force_shape))
-                _ = obs_group.create_dataset('torque', (self.max_ep_length, *torque_shape))
-                _ = obs_group.create_dataset('gripper_width', (self.max_ep_length, *width_shape))
-                _ = root.create_dataset('action', (self.max_ep_length, 7)) # 7 : joint 6 + gripper width 1
+                # unpack data and save to data dict
+                for k in postprocessed_data['obs'].keys():
+                    if k.endswith('joints'):
+                        data_dict['/observations/qpos'].append(postprocessed_data['obs'][k])
+                    elif k.endswith('width'):
+                        data_dict['/observations/gripper_width'].append(postprocessed_data['obs'][k])
+                    elif k.endswith('force'):
+                        data_dict['/observations/force'].append(postprocessed_data['obs'][k])
+                    elif k.endswith('torque'):
+                        data_dict['/observations/torque'].append(postprocessed_data['obs'][k])
+                    elif k.endswith('rgb'):
+                        for cam_name in self.camera_names:
+                            # data_dict[f'/observations/images/{cam_name}'].append(postprocessed_data['obs'][k])
+                            data_dict[f'/observations/images/{cam_name}'].append((postprocessed_data['obs'][k]*255).astype(np.uint8))
+                    else:
+                        pass
+                    
+                data_dict['/action'].append(postprocessed_data['action'])
 
-                for name, array in data_dict.items():
-                    root[name][...] = array[0]
+                # pad data
+                for key, array in data_dict.items():
+                    array = array[0]
+                    current_length = array.shape[0]
+
+                    if current_length < self.max_ep_length:
+                        pad_size = self.max_ep_length - current_length
+                        padding_shape = list(array.shape[1:])
+                        padding = np.zeros((pad_size, *padding_shape), dtype=array.dtype)
+                        array = np.concatenate([array, padding], axis=0)
+
+                    data_dict[key] = [array]
+
+                # convert each ep to hdf5 and save
+                with h5py.File(dataset_path, 'w', rdcc_nbytes=1024**2*2) as root:
+                    root.attrs['sim'] = False
+
+                    # make group
+                    obs_group = root.create_group('observations')
+                    image_group = obs_group.create_group('images')
+
+                    # create dataset case
+                    for cam_name in self.camera_names:
+                        _ = image_group.create_dataset(cam_name, (self.max_ep_length, *image_shape), dtype='uint8',
+                                                 chunks=(1, *image_shape), )
+                        # _ = image_group.create_dataset(cam_name, (self.max_ep_length, *image_shape), dtype='float32',
+                        #                          chunks=(1, *image_shape), )
+
+                    _ = obs_group.create_dataset('qpos', (self.max_ep_length, 6)) # joint 6
+                    _ = obs_group.create_dataset('force', (self.max_ep_length, *force_shape))
+                    _ = obs_group.create_dataset('torque', (self.max_ep_length, *torque_shape))
+                    _ = obs_group.create_dataset('gripper_width', (self.max_ep_length, *width_shape))
+                    _ = root.create_dataset('action', (self.max_ep_length, 7)) # 7 : joint 6 + gripper width 1
+
+                    for name, array in data_dict.items():
+                        root[name][...] = array[0]
 
         
         
@@ -774,4 +887,3 @@ class ACTDataConverter:
 
                 return interpolated_output
         
-

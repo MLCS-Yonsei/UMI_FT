@@ -14,13 +14,13 @@ eval: false
 onscreen_render: false
 policy_class: "ACT"             
 temporal_agg: false
-state_dim: 7 # 16 # 7
-action_dim: 7 # 10 # 7 
+state_dim: 16 # joint: 7 
+action_dim: 10 # joint: 7 
 chunk_size: 50
-num_episodes: 42
+num_episodes: 174 # 42 # 65
 camera_names : ["top"]
-max_ep_length: 1800 # hardcoded
-is_joint: True
+max_ep_length: 956 # hardcoded
+is_joint: False
 
 
 policy:

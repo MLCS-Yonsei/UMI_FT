@@ -9,3 +9,13 @@ python eval_real_noft.py --robot_config=example/eval_robots_config_ft.yaml -i /h
 python eval_act_real.py --robot_config=example/eval_robots_config_ft.yaml -i /home/jaco/best_epoch=11963.ckpt -o data/eval_peg_insertion/ -n /home/jaco/normalizer.pkl
 
 python eval_act_real.py --robot_config=example/eval_robots_config_ft.yaml -i /home/jaco/best_epoch=11963.ckpt -o data/eval_peg_insertion/ -n /home/jaco/normalizer.pkl -z /home/jaco/dataset.zarr.zip -r True
+
+
+python run_slam_pipeline_ft.py ~/GoPro_20250523
+
+python scripts_slam_pipeline/07_generate_replay_buffer_ft_depth.py -o ~/GoPro_20250519/dataset.zarr.zip ~/GoPro_20250519
+
+python scripts_slam_pipeline/07_generate_replay_buffer_ft_depth.py -o ~/GoPro_20250523/dataset.zarr.zip ~/GoPro_20250523
+
+
+python train.py --config-name=train_diffusion_unet_timm_umi_workspace_ft_depth task.dataset_path=/home/soochul/GoPro_20250523/dataset_depth.zarr.zip 
