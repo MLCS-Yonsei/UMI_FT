@@ -82,7 +82,7 @@ class TrainACTWorkspace(BaseWorkspace):
         if not cfg.training.resume:
             self.exclude_keys = ['optimizer']
         
-        self.convert_data = True #False
+        self.convert_data = True # False
 
         
     def run(self):
@@ -270,10 +270,10 @@ class TrainACTWorkspace(BaseWorkspace):
         print("Loading Dataset")
 
         train_dataset : ACTDataset
-        train_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=train_indices, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint)
+        train_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=train_indices, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint, is_depth=self.cfg.is_depth)
         # train_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=train_episode_ids, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint)
         val_dataset : ACTDataset
-        val_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=val_indices, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint)
+        val_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=val_indices, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint, is_depth=self.cfg.is_depth)
         # val_dataset = hydra.utils.instantiate(self.cfg.task.dataset, episode_indices=val_episode_ids, camera_names=self.cfg.camera_names, is_joint=self.cfg.is_joint)
 
         if not self.convert_data:

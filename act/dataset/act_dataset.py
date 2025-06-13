@@ -47,6 +47,7 @@ class ACTDataset(BaseDataset):
         val_ratio: float = 0.0,
         max_duration: float = None,
         is_joint: bool = False,
+        is_depth: bool = False,
         ):
 
         self.dataset_path = dataset_path
@@ -64,30 +65,34 @@ class ACTDataset(BaseDataset):
         self.shape_meta = shape_meta
         
         self.num_robot = 0
+        self.is_depth = is_depth
 
         # Load replay buffer
         print("Loading zarr")
-        replay_buffer = self.load_zarr()
+        replay_buffer = self.load_zarr(cache_dir)
         self.replay_buffer = replay_buffer
 
         # Solve key and attribute
         print("Solving key and attributes")
-        rgb_keys, lowdim_keys, key_horizon, key_down_sample_steps, key_latency_steps = self.solve_key_attr(shape_meta=shape_meta)
+        rgb_keys, depth_keys, lowdim_keys, key_horizon, key_down_sample_steps, key_latency_steps = self.solve_key_attr(shape_meta=shape_meta)
 
         self.rgb_keys = rgb_keys
+        self.depth_keys = depth_keys
         self.lowdim_keys = lowdim_keys
         self.key_horizon = key_horizon
         self.key_latency_steps = key_latency_steps
         self.key_down_sample_steps = key_down_sample_steps
 
         self.is_joint = is_joint
+        
 
         # Define sampler
         sampler = ACTSampler(
             episode_indices=self.episode_indices,
             hdf5_path=hdf5_path,
             cam_names=camera_names,
-            is_joint = self.is_joint
+            is_joint = self.is_joint,
+            is_depth = self.is_depth
         )
 
         self.sampler = sampler
@@ -106,12 +111,14 @@ class ACTDataset(BaseDataset):
             replay_buffer=self.replay_buffer,
             hdf5_path=self.hdf5_path,
             rgb_keys=self.rgb_keys,
+            depth_keys=self.depth_keys,
             lowdim_keys=self.lowdim_keys,
             key_horizon=self.key_horizon,
             key_latency_steps=self.key_latency_steps,
             key_down_sample_steps=self.key_down_sample_steps,
             camera_names=self.camera_names,
-            pose_repr = self.pose_repr
+            pose_repr = self.pose_repr,
+            is_depth = self.is_depth
         )
 
         # Convert UMI zarr data to hdf5
@@ -124,6 +131,7 @@ class ACTDataset(BaseDataset):
 
     def solve_key_attr(self, shape_meta):
         rgb_keys = list()
+        depth_keys = list()
         lowdim_keys = list()
         key_horizon = dict()
         key_down_sample_steps = dict()
@@ -134,6 +142,8 @@ class ACTDataset(BaseDataset):
             type = attr.get('type', 'low_dim')
             if type == 'rgb':
                 rgb_keys.append(key)
+            elif type == 'depth':
+                depth_keys.append(key)
             elif type == 'low_dim':
                 lowdim_keys.append(key) # SC: F/T is appended to lowdim_keys
 
@@ -156,7 +166,7 @@ class ACTDataset(BaseDataset):
         key_horizon['action'] = shape_meta['action']['horizon']
         key_latency_steps['action'] = shape_meta['action']['latency_steps']
         key_down_sample_steps['action'] = shape_meta['action']['down_sample_steps']
-        return rgb_keys, lowdim_keys, key_horizon, key_down_sample_steps, key_latency_steps
+        return rgb_keys, depth_keys, lowdim_keys, key_horizon, key_down_sample_steps, key_latency_steps
 
     def load_zarr(self, cache_dir=None):
         if cache_dir is None:
@@ -295,6 +305,10 @@ class ACTDataset(BaseDataset):
 
             for key in self.rgb_keys:
                 normalizer['images'] = get_image_identity_normalizer()
+            
+            if self.is_depth:
+                for key in self.depth_keys:
+                    normalizer['depth_images'] = get_image_identity_normalizer()
 
             return normalizer
         

@@ -27,12 +27,14 @@ class ACTSampler:
                  episode_indices,
                  hdf5_path,
                  cam_names,
-                 is_joint
+                 is_joint,
+                 is_depth,
                  ):
         self.episode_indices = episode_indices
         self.hdf5_path = hdf5_path
         self.cam_names = cam_names
         self.is_joint = is_joint
+        self.is_depth = is_depth
         self.is_sim = None
     
     def __len__(self):
@@ -57,8 +59,12 @@ class ACTSampler:
                 width = root['/observations/gripper_width'][start_ts]
 
                 image_dict = dict()
+                depth_image_dict = dict()
                 for cam_name in self.cam_names:
                     image_dict[cam_name] = root[f'/observations/images/{cam_name}'][start_ts]
+                    if self.is_depth:
+                        depth_image_dict[cam_name] = root[f'/observations/depth_images/{cam_name}'][start_ts]
+                    
                 if is_sim:
                     action = root['/action'][start_ts:]
                     action_len = episode_len - start_ts
@@ -78,18 +84,34 @@ class ACTSampler:
                 all_cam_images.append(image_dict[cam_name])
             all_cam_images = np.stack(all_cam_images, axis=0)
 
+            all_cam_depth_images = []
+            if self.is_depth:
+                for cam_name in self.cam_names:
+                    all_cam_depth_images.append(depth_image_dict[cam_name])
+                all_cam_depth_images = np.stack(all_cam_depth_images, axis=0)
+
             # image_data = torch.from_numpy(all_cam_images)
             # pos_data = torch.from_numpy(pos).float()
             # action_data = torch.from_numpy(padded_action).float()
             # is_pad = torch.from_numpy(is_pad).bool()
 
-            obs = {
-                'eef_pos': torch.from_numpy(pos).float(),
-                'eef_rot': torch.from_numpy(rot).float(),
-                'eef_rot_start': torch.from_numpy(rot_start).float(),
-                'gripper_width' : torch.from_numpy(width).float(),
-                'images' : torch.from_numpy(all_cam_images),
-            }
+            if self.is_depth:
+                obs = {
+                    'eef_pos': torch.from_numpy(pos).float(),
+                    'eef_rot': torch.from_numpy(rot).float(),
+                    'eef_rot_start': torch.from_numpy(rot_start).float(),
+                    'gripper_width' : torch.from_numpy(width).float(),
+                    'images' : torch.from_numpy(all_cam_images),
+                    'depth_images': torch.from_numpy(all_cam_depth_images),
+                }
+            else:
+                obs = {
+                    'eef_pos': torch.from_numpy(pos).float(),
+                    'eef_rot': torch.from_numpy(rot).float(),
+                    'eef_rot_start': torch.from_numpy(rot_start).float(),
+                    'gripper_width' : torch.from_numpy(width).float(),
+                    'images' : torch.from_numpy(all_cam_images),
+                }
 
             action = torch.from_numpy(padded_action).float()
 

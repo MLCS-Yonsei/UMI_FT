@@ -53,6 +53,7 @@ class ACTPolicy(nn.Module):
                  lr_drop,
                  clip_max_norm,
                  is_joint,
+                 is_depth,
 
                 ):
         super().__init__()
@@ -82,12 +83,14 @@ class ACTPolicy(nn.Module):
 
             'weight_decay': weight_decay,
             'lr_drop': lr_drop,
-            'clip_max_norm': clip_max_norm
+            'clip_max_norm': clip_max_norm,
+            'is_depth': is_depth,
 
         }
         model, optimizer = build_ACT_model_and_optimizer(policy_config)
 
         self.is_joint = is_joint
+        self.is_depth = is_depth
 
         self.model = model # CVAE decoder
         self.optimizer = optimizer
@@ -123,6 +126,9 @@ class ACTPolicy(nn.Module):
         # normalize input
         nobs = self.normalizer.normalize(obs_dict)
         images = nobs['images']
+        if self.is_depth:
+            depth_images = nobs['depth_images']
+
         # print("nobs: ", nobs)
         # nactions = self.normalizer['action'].normalize(action)
         # print("nactions: ", nactions)
@@ -136,14 +142,17 @@ class ACTPolicy(nn.Module):
 
         # print("low dim data: ", low_dim_data.shape) # bs, 10 -> 16 or 7
         # print("image: ", images.shape) # bs, 1, 3, 224, 224
+        # print("depth image: ", depth_images.shape) # bs, 1, 3, 224, 224
         # print("actions: ", nactions.shape) # bs, ep max length, 16 or 7
 
         if nactions is not None: # training time
             actions = nactions[:, :self.model.num_queries]
             is_pad = is_pad[:, :self.model.num_queries]
             # print("sliced actions: ", actions.shape) # bs, chunk size, 10
-
-            a_hat, is_pad_hat, (mu, logvar) = self.model(low_dim_data, images, env_state, actions, is_pad)
+            if self.is_depth:
+                a_hat, is_pad_hat, (mu, logvar) = self.model.forward_depth(low_dim_data, images, depth_images, env_state, actions, is_pad)
+            else:
+                a_hat, is_pad_hat, (mu, logvar) = self.model(low_dim_data, images, env_state, actions, is_pad)
 
             # TODO : change model architecture for force and torque
             # a_hat, is_pad_hat, (mu, logvar) = self.model(low_dim_data, images, force_data, torque_data, env_state, actions, is_pad)
@@ -158,7 +167,10 @@ class ACTPolicy(nn.Module):
             return loss_dict
         
         else: # inference time
-            a_hat, _, (_, _) = self.model(low_dim_data, images, env_state) # no action, sample from prior
+            if self.is_depth:
+                a_hat, _, (_, _) = self.model(low_dim_data, images, depth_images, env_state)
+            else:
+                a_hat, _, (_, _) = self.model(low_dim_data, images, env_state) # no action, sample from prior
             return a_hat
 
     def set_normalizer(self, normalizer: LinearNormalizer):

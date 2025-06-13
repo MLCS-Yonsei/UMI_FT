@@ -17,10 +17,11 @@ temporal_agg: false
 state_dim: 16 # joint: 7 
 action_dim: 10 # joint: 7 
 chunk_size: 50
-num_episodes: 174 # 42 # 65
+num_episodes: 202 # 42 # 65
 camera_names : ["top"]
-max_ep_length: 956 # hardcoded
+max_ep_length: 836 # hardcoded
 is_joint: False
+is_depth: True
 
 
 policy:
@@ -56,6 +57,7 @@ policy:
   lr_drop: 200
   clip_max_norm: 0.1
   is_joint: ${is_joint}
+  is_depth: ${is_depth}
 
 
 

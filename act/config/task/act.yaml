@@ -23,6 +23,13 @@ shape_meta: &shape_meta
       down_sample_steps: ${task.obs_down_sample_steps} # int
       type: rgb
       ignore_by_policy: False
+    camera0_depth:
+      shape: [3, 224, 224]
+      horizon: ${task.img_obs_horizon} # int
+      latency_steps: 0 # float
+      down_sample_steps: ${task.obs_down_sample_steps} # int
+      type: depth
+      ignore_by_policy: False
     robot0_eef_pos:
       shape: [3]
       horizon: ${task.low_dim_obs_horizon} # int
@@ -77,8 +84,8 @@ shape_meta: &shape_meta
     rotation_rep: rotation_6d
 
 task_name: &task_name act
-dataset_path: /home/soochul/GoPro_20250508/dataset.zarr.zip # GoPro_20250304/dataset.zarr.zip
-hdf5_path: /home/soochul/GoPro_20250508_hdf5/ # GoPro_20250304_hdf5/
+dataset_path: /home/soochul/GoPro_20250519/dataset_depth.zarr.zip # GoPro_20250304/dataset.zarr.zip
+hdf5_path: /home/soochul/GoPro_20250519_hdf5/ # GoPro_20250304_hdf5/
 pose_repr: &pose_repr
   obs_pose_repr: relative # abs or rel
   action_pose_repr: relative # abs or rel or delta
@@ -101,4 +108,5 @@ dataset:
   val_ratio: 0.2
   chunk_size: 50
   is_joint: True
+  is_depth: True
 

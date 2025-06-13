@@ -25,11 +25,13 @@ class ACTDataConverter:
                  hdf5_path: str,
                  camera_names: list,
                  rgb_keys: list,
+                 depth_keys: list,
                  lowdim_keys: list,
                  key_horizon: dict, # action horizon
                  key_latency_steps: dict,
                  key_down_sample_steps: dict,
-                 pose_repr: dict
+                 pose_repr: dict,
+                 is_depth: bool
                  ):
         
         
@@ -68,6 +70,7 @@ class ACTDataConverter:
         self.indices = indices
         self.ep_indices = ep_indices
         self.rgb_keys = rgb_keys
+        self.depth_keys = depth_keys
         self.lowdim_keys = lowdim_keys
         self.shape_meta = shape_meta
 
@@ -78,6 +81,8 @@ class ACTDataConverter:
         self.pose_repr = pose_repr
         self.obs_pose_repr = self.pose_repr['obs_pose_repr']
         self.action_pose_repr = self.pose_repr['action_pose_repr']
+
+        self.is_depth = is_depth
 
         self.sampler_lowdim_keys = list()
         for key in self.lowdim_keys:
@@ -96,6 +101,8 @@ class ACTDataConverter:
         for key, attr in shape_meta['obs'].items():
             shape = attr.get('shape')
             if key.endswith('rgb'):
+                shape_dict[key] = shape
+            elif key.endswith('depth'):
                 shape_dict[key] = shape
             elif key.endswith('pos'):
                 shape_dict[key] = shape
@@ -165,6 +172,10 @@ class ACTDataConverter:
         for key in self.rgb_keys:
             self.replay_buffer[key] = replay_buffer[key]
         
+        if self.is_depth:
+            for key in self.depth_keys:
+                self.replay_buffer[key] = replay_buffer[key]
+        
         if 'action' in replay_buffer:
             self.replay_buffer['action'] = replay_buffer['action'][:]
         else:
@@ -206,7 +217,10 @@ class ACTDataConverter:
 
         '''
         all_results = []
-        obs_keys = self.rgb_keys + self.sampler_lowdim_keys
+        if self.is_depth:
+            obs_keys = self.rgb_keys + self.depth_keys + self.sampler_lowdim_keys
+        else:
+            obs_keys = self.rgb_keys + self.sampler_lowdim_keys
         # if self.ignore_rgb_is_applied:
         #     obs_keys = self.sampler_lowdim_keys
         
@@ -226,6 +240,14 @@ class ACTDataConverter:
 
                 # calculate idx for image
                 if key in self.rgb_keys:
+                    image_idx_set = self.calculate_idx(key, start_idx, end_idx, this_horizon, this_downsample_steps, this_latency_steps)
+                    image_idx_set = sorted(list(image_idx_set))
+                    image_start_idx, image_end_idx = image_idx_set[0], image_idx_set[-1]
+                    
+                    # save image data
+                    episode_result[key] = obs_arr[image_start_idx:image_end_idx]
+
+                elif key in self.depth_keys:
                     image_idx_set = self.calculate_idx(key, start_idx, end_idx, this_horizon, this_downsample_steps, this_latency_steps)
                     image_idx_set = sorted(list(image_idx_set))
                     image_start_idx, image_end_idx = image_idx_set[0], image_idx_set[-1]
@@ -271,6 +293,17 @@ class ACTDataConverter:
             obs_dict[key] = np.moveaxis(data[key], -1, 1).astype(np.float32) / 255.
             # T,C,H,W
             del data[key]
+
+        if self.is_depth:
+            for key in self.depth_keys:
+                if not key in data:
+                    continue
+                # move channel last to channel first
+                # T,H,W,C
+                # convert uint8 image to float32
+                obs_dict[key] = np.moveaxis(data[key], -1, 1).astype(np.float32) / 255.
+                # T,C,H,W
+                del data[key]
 
         for key in self.sampler_lowdim_keys: 
             obs_dict[key] = data[key].astype(np.float32)
@@ -385,6 +418,8 @@ class ACTDataConverter:
             shape = self.shape_dict[key]
             if key.endswith('rgb'):
                 image_shape = shape
+            elif key.endswith('depth'):
+                depth_shape = shape
             elif key.endswith('pos'):
                 pos_shape = shape
             elif key.endswith('angle'):
@@ -433,6 +468,7 @@ class ACTDataConverter:
 
                 for cam_name in self.camera_names:
                     data_dict[f'/observations/images/{cam_name}'] = []
+                    data_dict[f'/observations/depth_images/{cam_name}'] = []
 
                 # unpack data and save to data dict
                 for k in postprocessed_data['obs'].keys():
@@ -452,6 +488,9 @@ class ACTDataConverter:
                         for cam_name in self.camera_names:
                             # data_dict[f'/observations/images/{cam_name}'].append(postprocessed_data['obs'][k])
                             data_dict[f'/observations/images/{cam_name}'].append((postprocessed_data['obs'][k]*255).astype(np.uint8))
+                    elif k.endswith('depth'):
+                        for cam_name in self.camera_names:
+                            data_dict[f'/observations/depth_images/{cam_name}'].append((postprocessed_data['obs'][k]*255).astype(np.uint8))
                     else:
                         raise NotImplementedError
 
@@ -477,6 +516,7 @@ class ACTDataConverter:
                     # make group
                     obs_group = root.create_group('observations')
                     image_group = obs_group.create_group('images')
+                    depth_group = obs_group.create_group('depth_images')
 
                     # create dataset case
                     for cam_name in self.camera_names:
@@ -484,6 +524,8 @@ class ACTDataConverter:
                                                  chunks=(1, *image_shape), )
                         # _ = image_group.create_dataset(cam_name, (self.max_ep_length, *image_shape), dtype='float32',
                         #                          chunks=(1, *image_shape), )
+                        _ = depth_group.create_dataset(cam_name, (self.max_ep_length, *depth_shape), dtype='uint8',
+                                                 chunks=(1, *depth_shape), )
 
                     _ = obs_group.create_dataset('eef_pos', (self.max_ep_length, *pos_shape))
                     _ = obs_group.create_dataset('eef_rot', (self.max_ep_length, *rot_shape))
@@ -820,6 +862,18 @@ class ACTDataConverter:
             return index_set
         else:
             if key in self.rgb_keys:
+                for current_idx in range(start_idx, end_idx):
+                    assert latency_steps == 0
+                    num_valid = min(horizon, (current_idx - start_idx) // downsample_steps + 1)
+                    slice_start = current_idx - (num_valid - 1) * downsample_steps
+                    downsampled_indices = list(range(slice_start, current_idx + 1, downsample_steps))
+
+                    for idx in downsampled_indices:
+                        index_set.add(int(idx))
+
+                return index_set
+
+            elif key in self.depth_keys:
                 for current_idx in range(start_idx, end_idx):
                     assert latency_steps == 0
                     num_valid = min(horizon, (current_idx - start_idx) // downsample_steps + 1)
