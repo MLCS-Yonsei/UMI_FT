@@ -5,6 +5,7 @@ data_local
 data_workspace
 outputs
 wandb
+dit/visual_features/
 **/.DS_Store
 *.lprof
 
