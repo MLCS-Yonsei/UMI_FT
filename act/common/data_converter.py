@@ -13,7 +13,6 @@ from act.common.normalize_util import (
     get_image_identity_normalizer, get_range_normalizer_from_stat)
 from act.common.pose_repr_util import convert_pose_mat_rep
 from act.common.pytorch_util import dict_apply
-from act.common.replay_buffer import ReplayBuffer
 from act.common.pose_util import pose_to_mat, mat_to_pose10d
 
 from ur_ikfast.ur_ikfast import ur_kinematics

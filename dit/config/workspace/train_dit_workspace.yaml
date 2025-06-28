@@ -1,28 +1,15 @@
 defaults:
   - _self_
-  - task: act
+  - task: umi_ft_depth
 
-name: train_act
-_target_: act.workspace.train_act_workspace.TrainACTWorkspace
+name: train_dit
+_target_: dit.workspace.train_dit_workspace.TrainDiTWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "default"
 
-# for ACT
-eval: false
-onscreen_render: false
-policy_class: "ACT"             
-temporal_agg: false
-state_dim: 16 # joint: 7 
-action_dim: 10 # joint: 7 
-chunk_size: 50
-num_episodes: 202 # 42 # 65
-camera_names : ["top"]
-max_ep_length: 836 # hardcoded
-is_joint: False
-is_depth: True
-
+n_action_steps: 8
 
 policy:
   _target_: act.policy.act_policy.ACTPolicy

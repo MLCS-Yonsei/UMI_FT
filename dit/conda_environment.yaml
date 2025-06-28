@@ -1,0 +1,87 @@
+name: umi_dit
+channels:
+  - conda-forge
+  - pytorch
+  - nvidia
+  - defaults
+dependencies:
+  # Core
+  - python=3.9
+  - pip=22.1
+  - pytorch=2.1.0
+  - pytorch-cuda=12.1          # requires NVIDIA driver ≥ 535
+  - torchvision=0.16.0
+
+  # Numerics / data
+  - numpy=1.24
+  - scipy=1.11
+  - numba=0.57
+  - pandas=2.1
+  - matplotlib=3.7
+  - ipykernel=6.23
+  - llvm-openmp=14             # Pytorch thread-affinity workaround
+
+  # Vision & media
+  - py-opencv=4.7
+  - av=10.0
+  - k3d=2.15
+
+  # ML / RL libs
+  - gym=0.21.0                 # gymnasium optional
+  - diffusers=0.25.0
+  - timm=0.9.7
+  - einops=0.6.1
+  - accelerate=0.24
+  - scikit-fda=0.9
+
+  # Data & utils
+  - zarr=2.16
+  - numcodecs=0.11
+  - pyyaml=6.0
+  - tqdm=4.65
+  - cmake>=3.22,<3.23   # - cmake=3.22.1=h1fce559_0
+  - patchelf
+  - boto3=1.33
+  - dill=0.3.7
+  - exiftool=12
+  - python-lmdb=1.4
+
+  # Hydra & friends
+  - hydra-core=1.3.2
+  - wandb=0.15.8
+
+  # Networking / async helpers
+  - aiohttp=3.9
+  - aiofiles=23.2
+  - plotly
+
+  # --- pip-only packages -------------------------------------------------
+  - pip:
+      # UMI
+      - ray[default]==2.8.0
+      - threadpoolctl==3.2
+      - v4l2py==2.2
+      - ur-rtde==1.5.6
+      - spnav @ https://github.com/cheng-chi/spnav/archive/c1c938ebe3cc542db4685e0d13850ff1abfdb943.tar.gz
+      - atomics==1.0.2
+      - pynput==1.7.6
+      - fastcrc==0.2
+      - imagecodecs==2023.9.18
+      - robomimic==0.2.0
+      - robosuite @ https://github.com/cheng-chi/robosuite/archive/3f2c3116f1c0a1916e94bfa28da4d055927d1ab3.tar.gz
+      - PyExifTool==0.5
+
+      # DiT
+      - imageio==2.22.1
+      - imageio-ffmpeg==0.4.7
+      - transforms3d
+      - hydra-ray-launcher==1.2.1
+      - hydra-submitit-launcher==1.2.0
+      - huggingface-hub==0.19.4
+      - dm-control==1.0.10
+      - dm-env==1.6
+      - dm-tree==0.1.8
+      - cloudpickle==2.0.0
+      - mujoco==2.3.2          # modern binding; remove if you keep free-mujoco-py
+      # - free-mujoco-py==2.1.6 # ← comment out unless required
+      - pre-commit==3.3.3
