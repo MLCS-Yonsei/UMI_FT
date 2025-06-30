@@ -24,7 +24,7 @@ rt: ${hydra:runtime.choices.agent/features}
 
 exp_name: test
 checkpoint_path: ${exp_name}.ckpt
-batch_size: 100
+batch_size: 200
 num_workers: 10
 lr: 0.0003
 max_iterations: 150000
@@ -42,8 +42,8 @@ train_transform: medium
 
 wandb:
   name: null
-  project: umi
+  project: umi0519
   group: ${exp_name}
   sweep_name_prefix: eval
   debug: False
-  entity: cmu-agi-lab
+  entity: usam205_

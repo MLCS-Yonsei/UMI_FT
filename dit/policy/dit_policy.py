@@ -110,7 +110,7 @@ class DiffusionTransformerPolicy(BasePolicy):
         loss = (loss * mask).sum(1)
         return loss.mean()
     
-    def predict_actions(self, imgs, obs, n_steps = None):
+    def get_actions(self, imgs, obs, n_steps = None):
         B, device = obs.shape[0], obs.device
         s_t = self.tokenize_obs(imgs, obs)
         encoder_cache = None

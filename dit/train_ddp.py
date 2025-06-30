@@ -17,6 +17,15 @@ import torch.multiprocessing as mp
 from dit.workspace.base_workspace import BaseWorkspace
 from dit.common import misc
 
+import torch, torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+def init_ddp():
+    dist.init_process_group(backend="nccl", init_method="env://")
+    local_rank = int(os.environ["LOCAL_RANK"])
+    torch.cuda.set_device(local_rank)
+    return local_rank, dist.get_rank(), dist.get_world_size()
+
 base_path = os.path.dirname(os.path.abspath(__file__))
 
 # allows arbitrary python code execution in configs using the ${eval:''} resolver
@@ -28,25 +37,19 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
     config_name="finetune_ddp.yaml"
 )
 def main(cfg: OmegaConf):
+    local_rank, rank, world_size = init_ddp()
+
+    # override batch_size per‐GPU
+    cfg.batch_size = max(cfg.batch_size // world_size, 1)
+
+
     # Get the workspace class
     cls = hydra.utils.get_class(cfg.workspace._target_)
     
-    # Check if we're doing multi-GPU training
-    world_size = cfg.get('devices', 1)
-    
-    if world_size == 1:
-        # Single GPU training - use original approach
-        workspace: BaseWorkspace = cls(cfg)
-        workspace.run()
-    else:
-        # Multi-GPU training - need to use DDP approach
-        if 'DDP' not in cfg.workspace._target_:
-            print(f"Warning: Using {world_size} GPUs but workspace is not DDP-enabled.")
-            print("Make sure to use TrainDiTWorkspaceDDP for multi-GPU training.")
-        
-        # The DDP workspace will handle the multiprocessing internally
-        workspace: BaseWorkspace = cls(cfg)
-        workspace.run()
+    workspace: BaseWorkspace = cls(cfg, local_rank=local_rank, rank=rank, world_size=world_size)
+    workspace.run()
+
+    dist.destroy_process_group()
 
 if __name__ == "__main__":
     # Set multiprocessing start method for CUDA compatibility

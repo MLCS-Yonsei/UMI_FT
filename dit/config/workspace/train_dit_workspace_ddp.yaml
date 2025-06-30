@@ -6,7 +6,7 @@ name: train_dit
 _target_: dit.workspace.train_dit_workspace_ddp.TrainDiTWorkspaceDDP
 
 
-devices: 1
+devices: 2
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "default"

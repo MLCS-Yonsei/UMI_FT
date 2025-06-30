@@ -12,7 +12,6 @@ import hydra
 import torch
 
 import torch.distributed as dist
-import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from omegaconf import OmegaConf
@@ -28,71 +27,48 @@ from dit.common import misc, transforms
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
-
-def setup_ddp(rank, world_size):
-    """Initialize distributed training environment."""
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
-    
-    # Initialize the process group
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
-    torch.cuda.set_device(rank)
-
-def cleanup_ddp():
-    """Clean up distributed training environment."""
-    dist.destroy_process_group()
-
-
-
 class TrainDiTWorkspaceDDP(BaseWorkspace):
-    def __init__(self, cfg: OmegaConf, rank=0, world_size=1, output_dir = None):
+    def __init__(self, cfg: OmegaConf, local_rank=0, rank=0, world_size=1, output_dir = None):
         super().__init__(cfg, output_dir=output_dir)
-
+        self.local_rank = local_rank
         self.rank = rank
         self.world_size = world_size
-        self.is_main_process = rank == 0
+        self.is_main_process = (rank == 0)
 
-        if self.is_main_process:
-            resume_model = misc.init_job(cfg)
-        else:
-            resume_model = None
+        resume_model = misc.init_job(cfg) if self.is_main_process else None
         
         # Broadcast resume_model to all processes
         if world_size > 1:
-            resume_model_list = [resume_model]
-            dist.broadcast_object_list(resume_model_list, src=0)
-            resume_model = resume_model_list[0]
+            dist.broadcast_object_list([resume_model], src=0)
+            resume_model = resume_model
 
 
         # set seed
         torch.manual_seed(cfg.seed + rank)
         np.random.seed(cfg.seed + rank + 1)
 
-        self.model: DiffusionTransformerPolicy = hydra.utils.instantiate(cfg.agent)
-        self.model = self.model.to(rank)
-
+        self.model: DiffusionTransformerPolicy = hydra.utils.instantiate(cfg.agent).to(local_rank)
         if world_size > 1:
-            self.model = DDP(
-                self.model, 
-                device_ids=[rank], 
-                output_device=rank,
-                find_unused_parameters=True  # Set to False if you're sure all parameters are used
-            )
+            self.model = DDP(self.model, 
+                             device_ids=[local_rank], 
+                             output_device=local_rank,
+                             broadcast_buffers=False,
+                            find_unused_parameters=False,)
         
 
         self.trainer: BaseTrainer = hydra.utils.instantiate(
             cfg.trainer, 
             model=self.model, 
-            device_id=rank)
+            device_id=local_rank)
 
 
         self.task: BCTaskDDP = hydra.utils.instantiate(
             cfg.task, 
-            batch_size=cfg.batch_size // world_size,  # Divide batch size
+            batch_size=cfg.batch_size,
             num_workers=cfg.num_workers,
             rank=rank,
             world_size=world_size,
-            use_distributed_sampler=(world_size > 1)
+            use_distributed_sampler=(world_size > 1),
         )
 
         # create a gpu train transform (if used)
@@ -107,12 +83,6 @@ class TrainDiTWorkspaceDDP(BaseWorkspace):
             misc.GLOBAL_STEP = self.trainer.load_checkpoint(resume_model)
         elif misc.GLOBAL_STEP == 0:
             self.trainer.save_checkpoint(cfg.checkpoint_path, misc.GLOBAL_STEP)
-        
-
-        if world_size > 1:
-            global_step_tensor = torch.tensor(misc.GLOBAL_STEP, dtype=torch.long, device=rank)
-            dist.broadcast(global_step_tensor, src=0)
-            misc.GLOBAL_STEP = global_step_tensor.item()
 
         
         assert misc.GLOBAL_STEP >= 0, "GLOBAL_STEP not loaded correctly!"
@@ -153,12 +123,24 @@ class TrainDiTWorkspaceDDP(BaseWorkspace):
                 train_iterator = iter(self.task.train_loader)
                 batch = next(train_iterator)
 
-            # handle the image transform on GPU if specified
+            (imgs, obs), actions, mask = batch
+
+            # Clone and move everything to the correct device
+            device = self.trainer.device_id
+
+            def prepare(t):
+                return t.detach().clone().contiguous().to(device, non_blocking=True)
+            
+            imgs = {k: prepare(v) for k, v in imgs.items()}
+            obs     = prepare(obs)
+            actions = prepare(actions)
+            mask    = prepare(mask)
+
+            # Now apply your GPU‐side augmentations/transforms
             if self.gpu_transform is not None:
-                (imgs, obs), actions, mask = batch
-                imgs = {k: v.to(self.trainer.device_id) for k, v in imgs.items()}
                 imgs = {k: self.gpu_transform(v) for k, v in imgs.items()}
-                batch = ((imgs, obs), actions, mask)
+
+            batch = ((imgs, obs), actions, mask)
 
             self.trainer.optim.zero_grad()
             loss = self.trainer.training_step(batch, misc.GLOBAL_STEP)
@@ -189,39 +171,36 @@ class TrainDiTWorkspaceDDP(BaseWorkspace):
             elif misc.GLOBAL_STEP % self.cfg.save_freq == 0:
                 self.trainer.save_checkpoint(self.cfg.checkpoint_path, misc.GLOBAL_STEP)
 
-
-def run_ddp_training(rank, world_size, cfg):
-    """Function to run on each GPU process."""
-    try:
-        # Setup distributed training
-        setup_ddp(rank, world_size)
-        
-        # Create and run workspace
-        workspace = TrainDiTWorkspaceDDP(cfg, rank=rank, world_size=world_size)
-        workspace.run()
-        
-    except Exception as e:
-        if rank == 0:  # Only log on main process
-            print(f"Training failed with error: {e}")
-            import traceback
-            traceback.print_exc()
-    finally:
-        cleanup_ddp()
+def init_ddp():
+    """Call once, at the very start of main()."""
+    # torchrun will export MASTER_ADDR, MASTER_PORT, LOCAL_RANK, WORLD_SIZE
+    dist.init_process_group(backend="nccl", init_method="env://")
+    local_rank = int(os.environ["LOCAL_RANK"])
+    torch.cuda.set_device(local_rank)
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    return local_rank, rank, world_size
 
 @hydra.main(
     version_base=None,
     config_path=str(pathlib.Path(__file__).parent.parent.joinpath("config")), 
     config_name=pathlib.Path(__file__).stem)
 def main(cfg):
-    world_size = cfg.get('devices', 1)
+    local_rank, rank, world_size = init_ddp()
+
+    cfg.batch_size = max(cfg.batch_size // world_size, 1)
+
+    workspace = TrainDiTWorkspaceDDP(
+        cfg,
+        local_rank=local_rank,
+        rank=rank,
+        world_size=world_size
+    )
+
+    workspace.run()
+
+    dist.destroy_process_group()
     
-    if world_size == 1:
-        # Single GPU training
-        workspace = TrainDiTWorkspaceDDP(cfg, rank=0, world_size=1)
-        workspace.run()
-    else:
-        # Multi-GPU training
-        mp.spawn(run_ddp_training, args=(world_size, cfg), nprocs=world_size, join=True)
 
 if __name__ == "__main__":
     main()

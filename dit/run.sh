@@ -1,0 +1,23 @@
+#!/bin/bash
+
+# Exit immediately if a command exits with a non-zero status
+set -e
+
+# Step 1: Download features
+./dit/download_features.sh
+
+# Step 2: Run training
+HYDRA_FULL_ERROR=1 nice -n 19 python -m dit.train \
+  exp_name=umi0519 \
+  agent=diffusion \
+  task=end_effector_r6_umi \
+  buffer_path=/home/soochul/GoPro_20250519_DiT/buf.pkl \
+  normalizer_path=/home/soochul/GoPro_20250519_DiT/normalizer.pkl \
+  max_iterations=500000  \
+  trainer=bc_cos_sched \
+  ac_chunk=100 \
+  train_transform=medium \
+  task.train_buffer.cam_indexes=[0,1] \
+  wandb.entity=usam205 \
+  wandb.project=dit_experiments \
+  wandb.debug=True
