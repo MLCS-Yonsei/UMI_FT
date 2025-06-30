@@ -15,7 +15,7 @@ params:
       norm_cfg:
         name: group_norm
         num_groups: 16
-      restore_path: ''
+      restore_path: /home/soochul/umi_act/UMI_FT/dit/visual_features/resnet18/IN_1M_resnet18.pth
       size: 18
       weights: IMAGENET1K_V1
     imgs_per_cam: ${add:${img_chunk},${len:${task.train_buffer.goal_indexes}}}
@@ -32,7 +32,7 @@ params:
     share_cam_features: false
     train_diffusion_steps: 100
     use_obs: add_token
-  batch_size: 15
+  batch_size: 100
   buffer_path: /home/soochul/GoPro_20250519_DiT/buf.pkl
   checkpoint_path: ${exp_name}.ckpt
   devices: 1
@@ -48,7 +48,7 @@ params:
   schedule_freq: 1
   seed: 292285
   task:
-    _target_: dit.task.task.BCTask
+    _target_: dit.task.task_ddp.BCTaskDDP
     ac_dim: 10
     n_cams: ${len:${task.train_buffer.cam_indexes}}
     obs_dim: 16
@@ -106,7 +106,7 @@ params:
     project: dit_experiments
     sweep_name_prefix: eval
   workspace:
-    _target_: dit.workspace.train_dit_workspace.TrainDiTWorkspace
+    _target_: dit.workspace.train_dit_workspace_ddp.TrainDiTWorkspaceDDP
     checkpoint:
       save_last_ckpt: true
       save_last_snapshot: false
@@ -121,6 +121,7 @@ params:
       persistent_workers: false
       pin_memory: true
       shuffle: true
+    devices: 1
     exp_name: default
     hydra:
       job:

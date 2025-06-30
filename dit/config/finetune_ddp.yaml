@@ -8,7 +8,7 @@ defaults:
   - agent: default
   - task: end_effector
   - trainer: bc
-  - workspace: train_dit_workspace
+  - workspace: train_dit_workspace_ddp
   - override hydra/launcher: slurm
   - _self_
 
@@ -31,7 +31,7 @@ max_iterations: 150000
 eval_freq: 10000
 save_freq: 10000
 schedule_freq: 1
-devices: 1
+devices: 2
 seed: 292285
 
 buffer_path: ./buf.pkl
