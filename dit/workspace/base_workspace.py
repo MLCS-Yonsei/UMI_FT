@@ -9,6 +9,8 @@ import dill
 import torch
 import threading
 
+from torch.nn.parallel import DistributedDataParallel as DDP
+
 
 class BaseWorkspace:
     include_keys = tuple()
@@ -31,7 +33,52 @@ class BaseWorkspace:
         Create any resource shouldn't be serialized as local variables
         """
         pass
+    
+    def save_checkpoint_dit(self, global_step, path=None, tag='latest', 
+            exclude_keys=None,
+            include_keys=None,
+            use_thread=True):
+        if path is None:
+            path = pathlib.Path(self.output_dir).joinpath('checkpoints', f'{tag}.ckpt')
+        else:
+            path = pathlib.Path(path)
+        if exclude_keys is None:
+            exclude_keys = tuple(self.exclude_keys)
+        if include_keys is None:
+            include_keys = tuple(self.include_keys) + ('_output_dir',)
 
+        path.parent.mkdir(parents=False, exist_ok=True)
+
+        model = self.trainer.model
+        model_weights = (
+            model.module.state_dict() if isinstance(model, DDP) else model.state_dict()
+        )
+
+        schedule_state = dict() if self.schedule is None else self.schedule.state_dict()
+        dit_dict = dict(
+            model=model_weights,
+            optim=self.optim.state_dict(),
+            schedule=schedule_state,
+            global_step=global_step,
+        )
+        
+        payload = {
+            'dit': dit_dict,
+            'cfg': self.cfg,
+            'pickles': dict()
+        }
+        for key, value in self.__dict__.items():
+            if key in include_keys:
+                payload['pickles'][key] = dill.dumps(value)
+
+        if use_thread:
+            self._saving_thread = threading.Thread(
+                target=lambda : torch.save(payload, path.open('wb'), pickle_module=dill))
+            self._saving_thread.start()
+        else:
+            torch.save(payload, path.open('wb'), pickle_module=dill)
+        return str(path.absolute())
+    
     def save_checkpoint(self, path=None, tag='latest', 
             exclude_keys=None,
             include_keys=None,

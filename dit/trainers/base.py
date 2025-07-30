@@ -75,7 +75,8 @@ class BaseTrainer(ABC):
         torch.save(save_dict, save_path)
 
     def load_checkpoint(self, load_path):
-        load_dict = torch.load(load_path)
+        # load_dict = torch.load(load_path)
+        load_dict = torch.load(load_path)['dit']
         model = self.model
         model = model.module if isinstance(model, DDP) else model
         model.load_state_dict(load_dict["model"])

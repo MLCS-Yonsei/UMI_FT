@@ -1,0 +1,408 @@
+params:
+  ac_chunk: 100
+  agent:
+    _target_: dit.policy.dit_policy.DiffusionTransformerPolicy
+    ac_chunk: ${ac_chunk}
+    ac_dim: ${task.ac_dim}
+    dropout: 0.1
+    early_fusion: false
+    eval_diffusion_steps: 8
+    feat_norm: null
+    features:
+      _target_: dit.models.resnet.ResNet
+      avg_pool: false
+      conv_repeat: ${mult:${agent.early_fusion},${agent.imgs_per_cam}}
+      norm_cfg:
+        name: group_norm
+        num_groups: 16
+      restore_path: /home/soochul/umi_act/UMI_FT/dit/visual_features/resnet18/IN_1M_resnet18.pth
+      size: 18
+      weights: IMAGENET1K_V1
+    imgs_per_cam: ${add:${img_chunk},${len:${task.train_buffer.goal_indexes}}}
+    n_cams: ${task.n_cams}
+    noise_net_kwargs:
+      activation: gelu
+      dim_feedforward: 2048
+      dropout: ${agent.dropout}
+      hidden_dim: 512
+      nhead: 8
+      num_blocks: 6
+      time_dim: 256
+    odim: ${task.obs_dim}
+    share_cam_features: false
+    train_diffusion_steps: 100
+    use_obs: add_token
+  batch_size: 100
+  buffer_path: /home/soochul/GoPro_20250519_DiT/buf.pkl
+  checkpoint_path: ${exp_name}.ckpt
+  devices: 1
+  eval_freq: 10000
+  exp_name: umi0519
+  img_chunk: 1
+  lr: 0.0003
+  max_iterations: 500000
+  normalizer_path: /home/soochul/GoPro_20250519_DiT/normalizer.pkl
+  num_workers: 10
+  rt: ${hydra:runtime.choices.agent/features}
+  save_freq: 10000
+  schedule_freq: 1
+  seed: 292285
+  task:
+    _target_: dit.task.task.BCTask
+    ac_dim: 10
+    n_cams: ${len:${task.train_buffer.cam_indexes}}
+    obs_dim: 16
+    test_buffer:
+      _target_: dit.common.replay_buffer.RobobufReplayBuffer
+      ac_chunk: ${ac_chunk}
+      ac_dim: ${task.ac_dim}
+      buffer_path: ${buffer_path}
+      cam_indexes: ${task.train_buffer.cam_indexes}
+      goal_indexes: ${task.train_buffer.goal_indexes}
+      mode: test
+      n_test_trans: 500
+      normalizer_path: ${normalizer_path}
+      past_frames: ${add:${img_chunk},-1}
+      transform: ${transform:preproc}
+    train_buffer:
+      _target_: dit.common.replay_buffer.RobobufReplayBuffer
+      ac_chunk: ${ac_chunk}
+      ac_dim: ${task.ac_dim}
+      buffer_path: ${buffer_path}
+      cam_indexes:
+      - 0
+      - 1
+      goal_indexes: []
+      mode: train
+      n_test_trans: 500
+      normalizer_path: ${normalizer_path}
+      past_frames: ${add:${img_chunk},-1}
+      transform: ${transform:${train_transform}}
+  train_transform: medium
+  trainer:
+    _target_: dit.trainers.bc.BehaviorCloning
+    optim_builder:
+      _target_: dit.trainers.utils.optim_builder
+      optimizer_kwargs:
+        betas:
+        - 0.95
+        - 0.999
+        eps: 1.0e-08
+        lr: ${lr}
+        weight_decay: 1.0e-06
+      optimizer_type: AdamW
+    schedule_builder:
+      _target_: dit.trainers.utils.schedule_builder
+      from_diffusers: true
+      schedule_kwargs:
+        num_training_steps: ${max_iterations}
+        num_warmup_steps: 2000
+      schedule_type: cosine
+  wandb:
+    debug: false
+    entity: usam205_
+    group: ${exp_name}
+    name: umi0519_run1
+    project: dit_experiments
+    sweep_name_prefix: eval
+  workspace:
+    _target_: dit.workspace.train_dit_workspace.TrainDiTWorkspace
+    checkpoint:
+      save_last_ckpt: true
+      save_last_snapshot: false
+      topk:
+        format_str: epoch={epoch:04d}-train_loss={train_loss:.3f}.ckpt
+        k: 20
+        mode: min
+        monitor_key: train_loss
+    dataloader:
+      batch_size: 64
+      num_workers: 4
+      persistent_workers: false
+      pin_memory: true
+      shuffle: true
+    exp_name: default
+    hydra:
+      job:
+        override_dirname: ${name}
+      run:
+        dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+      sweep:
+        dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+        subdir: ${hydra.job.num}
+    logging:
+      group: null
+      id: null
+      mode: online
+      name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+      project: act_debug
+      resume: true
+      tags:
+      - ${name}
+      - ${task_name}
+      - ${exp_name}
+    multi_run:
+      run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+      wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+    n_action_steps: 8
+    name: train_dit
+    optimizer:
+      _target_: torch.optim.AdamW
+      betas:
+      - 0.95
+      - 0.999
+      eps: 1.0e-08
+      lr: 0.0001
+      weight_decay: 1.0e-06
+    policy:
+      _target_: act.policy.act_policy.ACTPolicy
+      action_dim: ${action_dim}
+      backbone: resnet18
+      camera_names: ${camera_names}
+      clip_max_norm: 0.1
+      decoder_layers: 7
+      dilation: false
+      dim_feedforward: 3200
+      drop_out: 0.1
+      encoder_layers: 4
+      hidden_dim: 512
+      is_depth: ${is_depth}
+      is_joint: ${is_joint}
+      kl_weight: 10
+      lr: 5.0e-05
+      lr_backbone: 1.0e-05
+      lr_drop: 200
+      masks: false
+      nheads: 8
+      num_queries: ${chunk_size}
+      position_embedding: sine
+      pre_norm: true
+      state_dim: ${state_dim}
+      weight_decay: 0.0001
+    shape_meta: ${task.shape_meta}
+    task:
+      action_horizon: 16
+      camera_obs_latency: 0.125
+      dataset:
+        _target_: diffusion_policy.dataset.umi_dataset_ft_depth.UmiDatasetFTDepth
+        action_padding: false
+        cache_dir: null
+        dataset_path: ${task.dataset_path}
+        max_duration: null
+        pose_repr:
+          action_pose_repr: relative
+          obs_pose_repr: relative
+        repeat_frame_prob: 0.0
+        seed: 42
+        shape_meta:
+          action:
+            down_sample_steps: ${task.obs_down_sample_steps}
+            horizon: ${task.action_horizon}
+            latency_steps: 0
+            rotation_rep: rotation_6d
+            shape:
+            - 10
+          obs:
+            camera0_depth:
+              down_sample_steps: ${task.obs_down_sample_steps}
+              horizon: ${task.img_obs_horizon}
+              ignore_by_policy: false
+              latency_steps: 0
+              shape:
+              - 3
+              - 224
+              - 224
+              type: depth
+            camera0_rgb:
+              down_sample_steps: ${task.obs_down_sample_steps}
+              horizon: ${task.img_obs_horizon}
+              ignore_by_policy: false
+              latency_steps: 0
+              shape:
+              - 3
+              - 224
+              - 224
+              type: rgb
+            robot0_eef_pos:
+              down_sample_steps: ${task.obs_down_sample_steps}
+              horizon: ${task.low_dim_obs_horizon}
+              ignore_by_policy: ${task.ignore_proprioception}
+              latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency})
+                * ${task.dataset_frequeny}'}
+              shape:
+              - 3
+              type: low_dim
+            robot0_eef_rot_axis_angle:
+              down_sample_steps: ${task.obs_down_sample_steps}
+              horizon: ${task.low_dim_obs_horizon}
+              ignore_by_policy: ${task.ignore_proprioception}
+              latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency})
+                * ${task.dataset_frequeny}'}
+              raw_shape:
+              - 3
+              rotation_rep: rotation_6d
+              shape:
+              - 6
+              type: low_dim
+            robot0_eef_rot_axis_angle_wrt_start:
+              down_sample_steps: ${task.obs_down_sample_steps}
+              horizon: ${task.low_dim_obs_horizon}
+              ignore_by_policy: ${task.ignore_proprioception}
+              latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency})
+                * ${task.dataset_frequeny}'}
+              raw_shape:
+              - 3
+              shape:
+              - 6
+              type: low_dim
+            robot0_force:
+              down_sample_steps: ${task.obs_down_sample_steps}
+              horizon: ${task.low_dim_obs_horizon}
+              ignore_by_policy: ${task.ignore_proprioception}
+              latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.ft_sensor_obs_latency})
+                * ${task.dataset_frequeny}'}
+              shape:
+              - 3
+              type: low_dim
+            robot0_gripper_width:
+              down_sample_steps: ${task.obs_down_sample_steps}
+              horizon: ${task.low_dim_obs_horizon}
+              ignore_by_policy: ${task.ignore_proprioception}
+              latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.gripper_obs_latency})
+                * ${task.dataset_frequeny}'}
+              shape:
+              - 1
+              type: low_dim
+            robot0_torque:
+              down_sample_steps: ${task.obs_down_sample_steps}
+              horizon: ${task.low_dim_obs_horizon}
+              ignore_by_policy: ${task.ignore_proprioception}
+              latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.ft_sensor_obs_latency})
+                * ${task.dataset_frequeny}'}
+              shape:
+              - 3
+              type: low_dim
+        temporally_independent_normalization: false
+        val_ratio: 0.05
+      dataset_frequeny: 0
+      dataset_path: GoPro2/dataset.zarr.zip
+      env_runner:
+        _target_: diffusion_policy.env_runner.real_pusht_image_runner.RealPushTImageRunner
+      ft_sensor_obs_latency: 0.0001
+      gripper_obs_latency: 0.02
+      ignore_proprioception: false
+      img_obs_horizon: 2
+      low_dim_obs_horizon: 2
+      name: umi
+      obs_down_sample_steps: 3
+      pose_repr:
+        action_pose_repr: relative
+        obs_pose_repr: relative
+      robot_obs_latency: 0.0001
+      shape_meta:
+        action:
+          down_sample_steps: ${task.obs_down_sample_steps}
+          horizon: ${task.action_horizon}
+          latency_steps: 0
+          rotation_rep: rotation_6d
+          shape:
+          - 10
+        obs:
+          camera0_depth:
+            down_sample_steps: ${task.obs_down_sample_steps}
+            horizon: ${task.img_obs_horizon}
+            ignore_by_policy: false
+            latency_steps: 0
+            shape:
+            - 3
+            - 224
+            - 224
+            type: depth
+          camera0_rgb:
+            down_sample_steps: ${task.obs_down_sample_steps}
+            horizon: ${task.img_obs_horizon}
+            ignore_by_policy: false
+            latency_steps: 0
+            shape:
+            - 3
+            - 224
+            - 224
+            type: rgb
+          robot0_eef_pos:
+            down_sample_steps: ${task.obs_down_sample_steps}
+            horizon: ${task.low_dim_obs_horizon}
+            ignore_by_policy: ${task.ignore_proprioception}
+            latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency})
+              * ${task.dataset_frequeny}'}
+            shape:
+            - 3
+            type: low_dim
+          robot0_eef_rot_axis_angle:
+            down_sample_steps: ${task.obs_down_sample_steps}
+            horizon: ${task.low_dim_obs_horizon}
+            ignore_by_policy: ${task.ignore_proprioception}
+            latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency})
+              * ${task.dataset_frequeny}'}
+            raw_shape:
+            - 3
+            rotation_rep: rotation_6d
+            shape:
+            - 6
+            type: low_dim
+          robot0_eef_rot_axis_angle_wrt_start:
+            down_sample_steps: ${task.obs_down_sample_steps}
+            horizon: ${task.low_dim_obs_horizon}
+            ignore_by_policy: ${task.ignore_proprioception}
+            latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency})
+              * ${task.dataset_frequeny}'}
+            raw_shape:
+            - 3
+            shape:
+            - 6
+            type: low_dim
+          robot0_force:
+            down_sample_steps: ${task.obs_down_sample_steps}
+            horizon: ${task.low_dim_obs_horizon}
+            ignore_by_policy: ${task.ignore_proprioception}
+            latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.ft_sensor_obs_latency})
+              * ${task.dataset_frequeny}'}
+            shape:
+            - 3
+            type: low_dim
+          robot0_gripper_width:
+            down_sample_steps: ${task.obs_down_sample_steps}
+            horizon: ${task.low_dim_obs_horizon}
+            ignore_by_policy: ${task.ignore_proprioception}
+            latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.gripper_obs_latency})
+              * ${task.dataset_frequeny}'}
+            shape:
+            - 1
+            type: low_dim
+          robot0_torque:
+            down_sample_steps: ${task.obs_down_sample_steps}
+            horizon: ${task.low_dim_obs_horizon}
+            ignore_by_policy: ${task.ignore_proprioception}
+            latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.ft_sensor_obs_latency})
+              * ${task.dataset_frequeny}'}
+            shape:
+            - 3
+            type: low_dim
+      task_name: umi
+    task_name: ${task.name}
+    training:
+      batch_size: 64
+      checkpoint_every: 6000
+      debug: false
+      device: cuda:0
+      eval: false
+      num_epochs: 36000
+      resume: false
+      seed: 42
+      tqdm_interval_sec: 1.0
+    val_dataloader:
+      batch_size: 64
+      num_workers: 4
+      persistent_workers: false
+      pin_memory: true
+      shuffle: true
+wandb_id: ugelcr69

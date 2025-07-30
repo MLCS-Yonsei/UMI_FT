@@ -60,7 +60,7 @@ from umi.real_world.real_inference_util import (get_real_obs_dict,
                                                 get_real_umi_action)
 # from umi.real_world.spacemouse_shared_memory import Spacemouse
 from umi.common.pose_util import pose_to_mat, mat_to_pose
-from umi.common.plot_util import RealTimePlot
+# from umi.common.plot_util import RealTimePlot
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
