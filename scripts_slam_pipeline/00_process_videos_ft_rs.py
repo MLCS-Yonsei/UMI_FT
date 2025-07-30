@@ -1,0 +1,308 @@
+"""
+python scripts_slam_pipeline/00_process_videos.py data_workspace/toss_objects/20231113
+"""
+# %%
+import sys
+import os
+
+ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+sys.path.append(ROOT_DIR)
+os.chdir(ROOT_DIR)
+
+# %%
+import pathlib
+import click
+import shutil
+from exiftool import ExifToolHelper
+from umi.common.timecode_util import mp4_get_start_datetime
+
+import datetime
+import pandas as pd
+
+import numpy as np
+
+# %%
+@click.command(help='Session directories. Assumming mp4 videos are in <session_dir>/raw_videos')
+@click.argument('session_dir', nargs=-1)
+def main(session_dir):
+    for session in session_dir:
+        session = pathlib.Path(os.path.expanduser(session)).absolute()
+        # hardcode subdirs
+        input_dir = session.joinpath('raw_videos')
+        output_dir = session.joinpath('demos')
+        
+        # create raw_videos if don't exist
+        if not input_dir.is_dir():
+            input_dir.mkdir()
+            print(f"{input_dir.name} subdir don't exits! Creating one and moving all mp4 videos inside.")
+            for mp4_path in list(session.glob('**/*.MP4')) + list(session.glob('**/*.mp4')):
+                out_path = input_dir.joinpath(mp4_path.name)
+                shutil.move(mp4_path, out_path)
+        
+        # create mapping video if don't exist
+        mapping_vid_path = input_dir.joinpath('mapping.mp4')
+        if (not mapping_vid_path.exists()) and not(mapping_vid_path.is_symlink()):
+            max_size = -1
+            max_path = None
+            for mp4_path in list(input_dir.glob('**/*.MP4')) + list(input_dir.glob('**/*.mp4')):
+                size = mp4_path.stat().st_size
+                if size > max_size:
+                    max_size = size
+                    max_path = mp4_path
+            shutil.move(max_path, mapping_vid_path)
+            print(f"raw_videos/mapping.mp4 don't exist! Renaming largest file {max_path.name}.")
+        
+        # create gripper calibration video if don't exist
+        gripper_cal_dir = input_dir.joinpath('gripper_calibration')
+        if not gripper_cal_dir.is_dir():
+            gripper_cal_dir.mkdir()
+            print("raw_videos/gripper_calibration don't exist! Creating one with the first video of each camera serial.")
+            
+            serial_start_dict = dict()
+            serial_path_dict = dict()
+            with ExifToolHelper() as et:
+                for mp4_path in list(input_dir.glob('**/*.MP4')) + list(input_dir.glob('**/*.mp4')):
+                    if mp4_path.name.startswith('map'):
+                        continue
+                    
+                    start_date = mp4_get_start_datetime(str(mp4_path))
+                    meta = list(et.get_metadata(str(mp4_path)))[0]
+                    cam_serial = meta['QuickTime:CameraSerialNumber']
+                    
+                    if cam_serial in serial_start_dict:
+                        if start_date < serial_start_dict[cam_serial]:
+                            serial_start_dict[cam_serial] = start_date
+                            serial_path_dict[cam_serial] = mp4_path
+                    else:
+                        serial_start_dict[cam_serial] = start_date
+                        serial_path_dict[cam_serial] = mp4_path
+            
+            for serial, path in serial_path_dict.items():
+                print(f"Selected {path.name} for camera serial {serial}")
+                out_path = gripper_cal_dir.joinpath(path.name)
+                shutil.move(path, out_path)
+
+        # look for mp4 video in all subdirectories in input_dir
+        input_mp4_paths = list(input_dir.glob('**/*.MP4')) + list(input_dir.glob('**/*.mp4'))
+        print(f'Found {len(input_mp4_paths)} MP4 videos')
+
+        ###############################################################################################
+        # look for video directories in demos
+        video_datetime_to_outdir = {}
+        video_datetimes = []
+        ###############################################################################################
+
+        with ExifToolHelper() as et:
+            for mp4_path in input_mp4_paths:
+                if mp4_path.is_symlink():
+                    start_date = mp4_get_start_datetime(str(mp4_path))
+                    meta = list(et.get_metadata(str(mp4_path)))[0]
+                    cam_serial = meta['QuickTime:CameraSerialNumber']
+                    out_dname = 'demo_' + cam_serial + '_' + start_date.strftime(r"%Y.%m.%d_%H.%M.%S.%f")
+
+                    this_out_dir = output_dir.joinpath(out_dname)
+
+                    if mp4_path.name.startswith('mapping') or mp4_path.name.startswith('gripper_cal') or mp4_path.parent.name.startswith('gripper_cal'):
+                        pass
+                    else:
+                        video_datetime_to_outdir[start_date] = this_out_dir
+                        video_datetimes.append(start_date)
+
+                    print(f"Skipping {mp4_path.name}, already moved.")
+                    continue
+
+                start_date = mp4_get_start_datetime(str(mp4_path))
+                meta = list(et.get_metadata(str(mp4_path)))[0]
+                cam_serial = meta['QuickTime:CameraSerialNumber']
+                out_dname = 'demo_' + cam_serial + '_' + start_date.strftime(r"%Y.%m.%d_%H.%M.%S.%f")
+
+                # special folders
+                if mp4_path.name.startswith('mapping'):
+                    out_dname = "mapping"
+                elif mp4_path.name.startswith('gripper_cal') or mp4_path.parent.name.startswith('gripper_cal'):
+                    out_dname = "gripper_calibration_" + cam_serial + '_' + start_date.strftime(r"%Y.%m.%d_%H.%M.%S.%f")
+                
+                # create directory
+                this_out_dir = output_dir.joinpath(out_dname)
+                this_out_dir.mkdir(parents=True, exist_ok=True)
+                
+                # move videos
+                vfname = 'raw_video.mp4'
+                out_video_path = this_out_dir.joinpath(vfname)
+                shutil.move(mp4_path, out_video_path)
+
+                # create symlink back from original location
+                # relative_to's walk_up argument is not avaliable until python 3.12
+                dots = os.path.join(*['..'] * len(mp4_path.parent.relative_to(session).parts))
+                rel_path = str(out_video_path.relative_to(session))
+                symlink_path = os.path.join(dots, rel_path)                
+                mp4_path.symlink_to(symlink_path)
+
+
+        ###############################################################################################
+                # Store the video direction
+                if mp4_path.name.startswith('mapping') or mp4_path.name.startswith('gripper_cal') or mp4_path.parent.name.startswith('gripper_cal'):
+                    pass
+                else:
+                    video_datetime_to_outdir[start_date] = this_out_dir
+                    video_datetimes.append(start_date)
+
+        # Sort video datetimes
+        video_datetimes.sort()
+
+        ###############################################################################################
+
+        csv_datetimes = []
+        ###############################################################################################
+        # look for csv file in all subdirectories in input dir
+        input_csv_paths = list(input_dir.glob('*.csv'))
+        input_csv_paths.sort()
+        print(f'Found {len(input_csv_paths)} csv files')
+        assert len(input_csv_paths) + 2 == len(input_mp4_paths)
+        for i, csv_path in enumerate(input_csv_paths):
+            if csv_path.is_symlink():
+                print(f"Skipping {csv_path.name}, already moved.")
+                continue
+            
+            # numeric_columns = ['timestamp', 'Fx', 'Fy', 'Fz', 'Tx', 'Ty', 'Tz', 'width', 'width_origin', 'minW', 'maxW']
+            numeric_columns = ['timestamp', 'Fx', 'Fy', 'Fz', 'Tx', 'Ty', 'Tz', 'width', 'width_origin', 'minW', 'maxW', 'stiffness']
+            
+            # Filter ill rows
+            print(f"Filtering {csv_path.name}")
+            # df = pd.read_csv(csv_path, encoding='latin1')
+            with open(csv_path, 'r', encoding='latin1') as f:
+                lines = f.readlines()
+
+            valid_lines = []
+            expected_columns = len(numeric_columns)  # Set this to the expected number of fields
+            for l, line in enumerate(lines):
+                if len(line.split(',')) == expected_columns:
+                    valid_lines.append(line)
+                else:
+                    print(f"Skipping row {l+1}: {line.strip()} (unexpected field count)")
+            
+            # Save cleaned data back to a temporary file
+            temp_cleaned_path = csv_path.parent / f"temp_{csv_path.name}"
+            with open(temp_cleaned_path, 'w', encoding='latin1') as f:
+                f.writelines(valid_lines)
+
+            # Read the cleaned CSV
+            df = pd.read_csv(temp_cleaned_path, encoding='latin1')
+            
+            for col in numeric_columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            corrupted_rows = df[df.isnull().any(axis=1)]
+            print(f"Found {len(corrupted_rows)} corrupted rows. Dropping them.")
+            df_cleaned = df.dropna()
+            df_interpolated = df_cleaned.interpolate(method='linear', limit_direction='both', axis=0)
+            df_interpolated.to_csv(csv_path, index=False)
+            print(f"Filtering succeed")
+
+            try:
+                os.remove(temp_cleaned_path)
+                print(f"Temporary file {temp_cleaned_path} deleted successfully.")
+            except OSError as e:
+                print(f"Error deleting temporary file {temp_cleaned_path}: {e}")
+
+
+            # move F/T sensor and gripper width csv file
+            # the csv file name are like 'task_YYYYMMDD_HHMMSS.csv'
+            csv_filename = csv_path.name
+            csv_base_name = csv_filename.split('.')[0]
+            name_parts = csv_base_name.split('_')
+            if len(name_parts) < 3:
+                print(f"csv filename {csv_filename} does not have expected format.")
+                continue
+            date_part = name_parts[1]
+            time_part = name_parts[2]
+            csv_datetime_str = date_part + time_part
+
+            try:
+                csv_datetime = datetime.datetime.strptime(csv_datetime_str, "%Y%m%d%H%M%S")
+                csv_datetimes.append(csv_datetime)
+            except ValueError:
+                print(f"Could not parse datetime from csv file name {csv_filename}")
+                continue
+            
+
+            this_out_dir = video_datetime_to_outdir[video_datetimes[i]]
+            print(f"Pair with {this_out_dir}")
+            cfname = 'ft_sensor_gripper_width.csv'
+            out_csv_path = this_out_dir.joinpath(cfname)
+
+            shutil.move(csv_path, out_csv_path)
+
+            # Create symlink back from original location
+            dots = os.path.join(*['..'] * len(csv_path.parent.relative_to(session).parts))
+            rel_path = str(out_csv_path.relative_to(session))
+            symlink_path = os.path.join(dots, rel_path)
+            csv_path.symlink_to(symlink_path)
+        ###############################################################################################
+        
+        # look for realsense data folders in input dir
+        input_rs_paths = [p for p in input_dir.glob('rs_*') if p.is_dir()]
+        input_rs_paths.sort()
+        print(f'Found {len(input_rs_paths)} realsense data folders')
+
+        for rs_path in input_rs_paths:
+            if rs_path.is_symlink():
+                print(f"Skipping {rs_path.name}, already moved.")
+                continue
+
+            rs_filename = rs_path.name
+            name_parts = rs_filename.split('_')
+            if len(name_parts) < 3:
+                print(f"realsense folder name {rs_filename} does not have expected format 'rs_YYYYMMDD_HHMMSS'.")
+                continue
+            date_part = name_parts[1]
+            time_part = name_parts[2]
+            rs_datetime_str = date_part + time_part
+
+            try:
+                rs_datetime = datetime.datetime.strptime(rs_datetime_str, "%Y%m%d%H%M%S")
+            except ValueError:
+                print(f"Could not parse datetime from realsense folder name {rs_filename}")
+                continue
+            
+            if not video_datetimes:
+                print(f"No videos to match with {rs_path.name}. Skipping.")
+                continue
+
+            # Find the closest video in time
+            time_diffs = [abs((rs_datetime - vid_dt).total_seconds()) for vid_dt in video_datetimes]
+            closest_video_idx = np.argmin(time_diffs)
+            min_diff = time_diffs[closest_video_idx]
+            
+            # Set a threshold for matching (e.g., 5 seconds)
+            if min_diff > 5.0:
+                print(f"No video found for {rs_path.name} within 5s. Closest is {min_diff:.2f}s away. Skipping.")
+                continue
+
+            closest_video_dt = video_datetimes[closest_video_idx]
+            this_out_dir = video_datetime_to_outdir[closest_video_dt]
+
+            print(f"Pairing {rs_path.name} with {this_out_dir.name} (time diff: {min_diff:.2f}s)")
+            
+            # Move the folder
+            out_rs_path = this_out_dir.joinpath('realsense_data')
+            if out_rs_path.exists():
+                print(f"Warning: {out_rs_path} already exists. Skipping move for {rs_path.name}.")
+                continue
+            
+            shutil.move(rs_path, out_rs_path)
+
+            # Create symlink back from original location
+            dots = os.path.join(*['..'] * len(rs_path.parent.relative_to(session).parts))
+            rel_path = str(out_rs_path.relative_to(session))
+            symlink_path = os.path.join(dots, rel_path)
+            rs_path.symlink_to(symlink_path)
+        ###############################################################################################
+
+
+
+# %%
+if __name__ == '__main__':
+    if len(sys.argv) == 1:
+        main.main(['--help'])
+    else:
+        main()
